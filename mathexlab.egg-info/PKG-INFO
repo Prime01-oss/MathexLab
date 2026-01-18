@@ -1,0 +1,40 @@
+Metadata-Version: 2.4
+Name: mathexlab
+Version: 1.0.0
+Summary: MathexLab — an open scientific computing environment and MATLAB-compatible platform for STEM education and research.
+Author-email: MathexLab Team <contact@mathexlab.org>
+Maintainer-email: MathexLab Core Team <core@mathexlab.org>
+Keywords: scientific-computing,matlab,numerical-analysis,education,engineering,data-visualization,stem
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Intended Audience :: Education
+Classifier: Intended Audience :: Science/Research
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Topic :: Scientific/Engineering
+Classifier: Topic :: Scientific/Engineering :: Mathematics
+Classifier: Topic :: Education
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: numpy>=1.26
+Requires-Dist: scipy>=1.11
+Requires-Dist: matplotlib>=3.8
+Requires-Dist: PySide6>=6.6
+Requires-Dist: sympy
+Provides-Extra: dev
+Requires-Dist: pytest>=7.4; extra == "dev"
+Requires-Dist: pytest-qt>=4.4; extra == "dev"
+Requires-Dist: black>=24.0; extra == "dev"
+Requires-Dist: ruff>=0.2; extra == "dev"
+Requires-Dist: mypy>=1.8; extra == "dev"
+Requires-Dist: pre-commit>=3.6; extra == "dev"
+Provides-Extra: docs
+Requires-Dist: sphinx>=7.2; extra == "docs"
+Requires-Dist: sphinx-rtd-theme>=2.0; extra == "docs"
+Requires-Dist: myst-parser>=2.0; extra == "docs"
+Provides-Extra: perf
+Requires-Dist: numba>=0.59; extra == "perf"
+Provides-Extra: symbolic
+Requires-Dist: sympy>=1.12; extra == "symbolic"

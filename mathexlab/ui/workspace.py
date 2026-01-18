@@ -1,0 +1,179 @@
+# mathexlab/ui/workspace.py
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, 
+    QToolButton, QTableWidget, QTableWidgetItem, 
+    QHeaderView, QAbstractItemView
+)
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
+import types
+
+# IMPORT THE INSPECTOR
+from .variable_inspector import VariableInspector
+
+class WorkspaceWidget(QWidget):
+    """
+    Professional Workspace with Tabular Borders and Inspector.
+    """
+    
+    # Define Signals for the Toolbar Actions
+    clear_requested = Signal()
+    save_requested = Signal()
+    load_requested = Signal()
+    
+    # [NEW] Signal emitted when a variable is modified in the inspector
+    variable_edited = Signal(str, object)
+
+    def __init__(self):
+        super().__init__()
+        
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(0)
+
+        # --- Toolbar ---
+        self.toolbar = QWidget()
+        self.toolbar.setStyleSheet("background-color: #252526; border-bottom: 1px solid #333;")
+        tb_layout = QHBoxLayout(self.toolbar)
+        tb_layout.setContentsMargins(4, 4, 4, 4)
+        
+        self.search_bar = QLineEdit()
+        self.search_bar.setPlaceholderText("Filter...")
+        self.search_bar.setStyleSheet("""
+            QLineEdit {
+                background: #333333;
+                color: #cccccc;
+                border: 1px solid #3e3e42;
+                padding: 2px 4px;
+            }
+            QLineEdit:focus { border: 1px solid #007acc; }
+        """)
+        self.search_bar.textChanged.connect(lambda: self.filter_table(self.search_bar.text()))
+        tb_layout.addWidget(self.search_bar)
+        
+        # Connect buttons to signals
+        actions = [
+            ("Clear", self.clear_requested),
+            ("Save", self.save_requested),
+            ("Load", self.load_requested)
+        ]
+
+        for text, signal in actions:
+            btn = QToolButton()
+            btn.setText(text)
+            btn.setStyleSheet("QToolButton{color:#ccc;background:transparent;padding:2px;} QToolButton:hover{background:#3e3e42;}")
+            
+            # Connect the click to the signal emission
+            btn.clicked.connect(signal.emit)
+            
+            tb_layout.addWidget(btn)
+            
+        self.layout.addWidget(self.toolbar)
+
+        # --- Table ---
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["Name", "Value", "Class"])
+        self.table.setShowGrid(True)
+        self.table.verticalHeader().setVisible(False)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        
+        self.table.setStyleSheet("""
+            QTableWidget {
+                background-color: #1e1e1e;
+                color: #cccccc;
+                gridline-color: #444444; 
+                border: none;
+            }
+            QTableWidget::item { padding: 4px; border-bottom: 1px solid #2d2d2d; }
+            QHeaderView::section {
+                background-color: #2d2d2d;
+                color: #cccccc;
+                padding: 4px;
+                border: 1px solid #333333;
+                font-weight: bold;
+            }
+        """)
+        self.table.setColumnWidth(0, 100)
+        self.table.setColumnWidth(1, 150)
+        
+        # CONNECT DOUBLE CLICK TO INSPECTOR
+        self.table.cellDoubleClicked.connect(self.on_table_double_click)
+        
+        self.layout.addWidget(self.table)
+        self.current_globals = {}
+
+    def update_table(self, globals_dict):
+        self.current_globals = globals_dict.copy()
+        self.filter_table(self.search_bar.text())
+
+    def filter_table(self, query):
+        query = query.lower()
+        vars_to_show = {}
+        for k, v in self.current_globals.items():
+            if k.startswith('_'): continue
+            if callable(v) or isinstance(v, type) or isinstance(v, types.ModuleType): continue
+            if query in k.lower():
+                vars_to_show[k] = v
+        
+        self.table.setRowCount(len(vars_to_show))
+        
+        error_color = QColor("#ff5555")
+        
+        for row, (name, val) in enumerate(sorted(vars_to_show.items())):
+            self.table.setItem(row, 0, QTableWidgetItem(name))
+            
+            try: 
+                val_str = self._format_value(val)
+                is_error = False
+            except: 
+                val_str = "Error"
+                is_error = True
+            
+            value_item = QTableWidgetItem(val_str)
+            if is_error or val_str == "Error":
+                value_item.setForeground(error_color)
+                value_item.setToolTip("Unable to display value")
+
+            self.table.setItem(row, 1, value_item)
+            
+            t_name = type(val).__name__
+            if t_name == 'MatlabArray': t_name = 'double'
+            self.table.setItem(row, 2, QTableWidgetItem(t_name))
+
+    def _format_value(self, val):
+        if hasattr(val, 'shape'):
+             if isinstance(val.shape, (tuple, list)):
+                 return f"{'x'.join(map(str, val.shape))} {type(val).__name__}"
+        if isinstance(val, (int, float, complex)): return str(val)
+        return str(val)[:50]
+
+    # --- INSPECTOR LOGIC ---
+    def on_table_double_click(self, row, col):
+        # Get variable name from first column
+        item = self.table.item(row, 0)
+        if not item: return
+        name = item.text()
+        
+        val = self.current_globals.get(name)
+        if val is not None:
+            # Launch Inspector
+            dlg = VariableInspector(name, val, self)
+            
+            # [NEW] Handle edits
+            dlg.value_changed.connect(lambda new_val: self._handle_var_update(name, new_val))
+            
+            dlg.exec()
+
+    def _handle_var_update(self, name, new_val):
+        """Called when inspector emits a change."""
+        # 1. Update local copy so table refreshes correctly
+        self.current_globals[name] = new_val
+        
+        # 2. Refresh the table (simple way)
+        self.filter_table(self.search_bar.text())
+        
+        # 3. Emit signal so App can update the real Kernel Session
+        self.variable_edited.emit(name, new_val)

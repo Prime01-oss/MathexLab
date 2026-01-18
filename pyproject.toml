@@ -1,0 +1,139 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# ==========================================================
+# PROJECT METADATA
+# ==========================================================
+
+[project]
+name = "mathexlab"
+version = "1.0.0"
+description = "MathexLab — an open scientific computing environment and MATLAB-compatible platform for STEM education and research."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Samarjit Patar", email = "patarsamar123abc@gmail.com" }
+]
+maintainers = [
+    { name = "Samarjit", email = "patarsamar123abc@gmail.com" }
+]
+
+requires-python = ">=3.10"
+
+keywords = [
+    "scientific-computing",
+    "matlab",
+    "numerical-analysis",
+    "education",
+    "engineering",
+    "data-visualization",
+    "stem"
+]
+
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Education",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Topic :: Education"
+]
+
+# ==========================================================
+# CORE DEPENDENCIES (RUNTIME)
+# ==========================================================
+
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "matplotlib>=3.8",
+    "PySide6>=6.6",
+    "sympy"
+]
+
+# ==========================================================
+# OPTIONAL DEPENDENCIES (TOOLBOXES / DEV)
+# ==========================================================
+
+[project.optional-dependencies]
+
+# --- Development ---
+dev = [
+    "pytest>=7.4",
+    "pytest-qt>=4.4",
+    "black>=24.0",
+    "ruff>=0.2",
+    "mypy>=1.8",
+    "pre-commit>=3.6",
+]
+
+# --- Documentation ---
+docs = [
+    "sphinx>=7.2",
+    "sphinx-rtd-theme>=2.0",
+    "myst-parser>=2.0",
+]
+
+# --- Performance ---
+perf = [
+    "numba>=0.59",
+]
+
+# --- Symbolic Toolbox ---
+symbolic = [
+    "sympy>=1.12",
+]
+
+# ==========================================================
+# ENTRY POINTS
+# ==========================================================
+
+[project.scripts]
+mathexlab = "mathexlab.cli:main"
+
+# ==========================================================
+# SETUPTOOLS CONFIGURATION
+# ==========================================================
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mathexlab*"]
+
+# ==========================================================
+# TOOLING CONFIGURATION
+# ==========================================================
+
+[tool.black]
+line-length = 88
+target-version = ["py310"]
+skip-string-normalization = true
+
+[tool.ruff]
+line-length = 88
+select = ["E", "F", "I"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+# ==========================================================
+# PYTEST
+# ==========================================================
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q"
+testpaths = ["tests"]
+
