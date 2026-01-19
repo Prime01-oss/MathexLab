@@ -20,7 +20,13 @@ import logging
 import time
 
 # [FIX] Essential for 3D plotting to work
-import mpl_toolkits.mplot3d 
+try:
+    import mpl_toolkits.mplot3d 
+    from mpl_toolkits.mplot3d.art3d import Line3D
+    HAS_MPL_3D = True
+except ImportError:
+    HAS_MPL_3D = False
+    Line3D = object # Mock
 
 # Conditional imports for Headless mode support
 try:
@@ -56,6 +62,52 @@ def _unwrap(v):
     if isinstance(v, (list, tuple)) and len(v) > 0 and hasattr(v[0], '_data'):
         return np.array([x._data for x in v])
     return v
+
+
+# ============================================================
+# Custom Canvas (The Ironclad Fix)
+# ============================================================
+
+if HAS_QT:
+    class MathexLabCanvas(FigureCanvasQTAgg):
+        """
+        Custom Canvas that intercepts the draw call to sanitize 3D objects
+        caused by Matplotlib version mismatches (v3.8+ vs mpl_toolkits).
+        """
+        def draw(self):
+            # [CRITICAL] Sanitize BEFORE passing control to the backend renderer
+            self._sanitize_3d_artists()
+            try:
+                super().draw()
+            except Exception:
+                # If it still crashes, log it but don't kill the app
+                traceback.print_exc()
+
+        def _sanitize_3d_artists(self):
+            """
+            Runtime Patcher for Line3D attributes.
+            Ensures _axlim_clip and _verts3d exist to prevent AttributeError.
+            """
+            if not HAS_MPL_3D: return
+
+            try:
+                # Iterate over all axes in the figure
+                for ax in self.figure.axes:
+                    # Check if it's a 3D axis (has 'zaxis')
+                    if hasattr(ax, 'zaxis'):
+                        # Check all lines in this axis
+                        for line in ax.lines:
+                            if isinstance(line, Line3D):
+                                # Fix 1: Missing _axlim_clip
+                                if not hasattr(line, '_axlim_clip'):
+                                    line._axlim_clip = False
+                                
+                                # Fix 2: Missing _verts3d (Critical for drawing)
+                                if not hasattr(line, '_verts3d'):
+                                    # Initialize with empty data to prevent crash
+                                    line._verts3d = ([], [], [])
+            except Exception:
+                pass
 
 
 # ============================================================
@@ -194,6 +246,7 @@ class PlotWidget(QWidget):
         # -------------------------------------------------------
         # 1. Appearance / Defaults (Global Polish)
         # -------------------------------------------------------
+        # [FIX] Set default colors here so clf() resets to DARK, not WHITE
         plt.rcParams.update({
             'figure.autolayout': False,             # Disable legacy tight_layout
             'figure.constrained_layout.use': True,  # Default to Constrained for 2D
@@ -205,8 +258,20 @@ class PlotWidget(QWidget):
             'ytick.direction': 'in',         
             'font.family': 'sans-serif',
             'font.size': 10,
+            
+            # Dark Theme Defaults (Critical for proper clf() behavior)
+            'figure.facecolor': '#1e1e1e',
+            'figure.edgecolor': '#1e1e1e',
             'savefig.facecolor': '#1e1e1e',
-            'savefig.edgecolor': '#1e1e1e'
+            'savefig.edgecolor': '#1e1e1e',
+            'axes.facecolor': '#252526',
+            'axes.edgecolor': '#666666',
+            'axes.labelcolor': '#eeeeee',
+            'xtick.color': '#cccccc',
+            'ytick.color': '#cccccc',
+            'text.color': '#eeeeee',
+            'grid.color': '#444444',
+            'grid.alpha': 0.8
         })
 
         # -------------------------------------------------------
@@ -220,7 +285,9 @@ class PlotWidget(QWidget):
             
         self.figure.patch.set_facecolor("#1e1e1e")
         
-        self.canvas = FigureCanvasQTAgg(self.figure)
+        # [FIX] Use Custom Canvas class here!
+        self.canvas = MathexLabCanvas(self.figure)
+        
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.canvas.updateGeometry()
 
@@ -329,6 +396,7 @@ class PlotWidget(QWidget):
     def _apply_axes_defaults(self, ax):
         try:
             ax._mathex_styled = True
+            # [FIX] Enforce dark facecolor explicitly
             ax.set_facecolor("#252526")
             ax.tick_params(axis="both", colors="#cccccc", which='both', labelsize=9)
             
@@ -357,7 +425,8 @@ class PlotWidget(QWidget):
                 if hasattr(ax, 'zaxis'): ax.zaxis.label.set_color("#eeeeee")
 
         except Exception as e:
-            print(f"[Warning] Failed to apply axes style: {e}")
+            # [FIX] Print error instead of swallowing it
+            traceback.print_exc()
 
     # -------------------------------------------------------
     # Utilities
@@ -368,19 +437,22 @@ class PlotWidget(QWidget):
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore")
                 if self.figure.get_figwidth() <= 0: return
+                
                 if immediate:
                     self.canvas.draw()
                     self.canvas.flush_events()
                 else:
                     self.canvas.draw_idle()
         except Exception:
-            pass
+            # [FIX] Show render errors
+            traceback.print_exc()
 
     def savefig(self, path, **kwargs):
         try:
             self.figure.savefig(path, **kwargs)
             return True
         except Exception:
+            traceback.print_exc()
             return False
 
     def clear(self):
@@ -388,12 +460,16 @@ class PlotWidget(QWidget):
         try:
             self.figure.clf()
             
+            # [FIX] Re-apply dark background immediately after clear
+            self.figure.patch.set_facecolor("#1e1e1e")
+            
             # [RESET] Force clean 2D state for next plot
             self._current_layout_mode = None
             self.configure_layout(is_3d=False)
             
         except Exception:
-            pass
+            traceback.print_exc()
+
         self._line_points.clear()
         self.clear_annotations()
         
@@ -411,6 +487,7 @@ class PlotWidget(QWidget):
             self.canvas.flush_events()
             return self.figure.ginput(n=n, timeout=timeout, show_clicks=show_clicks, mouse_add=1, mouse_pop=3, mouse_stop=2)
         except Exception:
+            traceback.print_exc()
             return []
 
     def enable_datacursor(self, enabled=True):
@@ -427,17 +504,17 @@ class PlotWidget(QWidget):
         ax = event.inaxes
         if ax is None or getattr(ax, 'name', '') == '3d': return
 
-        best, bestd = None, float("inf")
-        for xs, ys in self._line_points:
-            dx, dy = xs - event.xdata, ys - event.ydata
-            d = dx*dx + dy*dy
-            idx = np.nanargmin(d)
-            if d[idx] < bestd:
-                bestd, best = d[idx], (xs[idx], ys[idx])
+        try:
+            best, bestd = None, float("inf")
+            for xs, ys in self._line_points:
+                dx, dy = xs - event.xdata, ys - event.ydata
+                d = dx*dx + dy*dy
+                idx = np.nanargmin(d)
+                if d[idx] < bestd:
+                    bestd, best = d[idx], (xs[idx], ys[idx])
 
-        if best:
-            self.clear_annotations()
-            try:
+            if best:
+                self.clear_annotations()
                 ann = ax.annotate(
                     f"X: {best[0]:.4g}\nY: {best[1]:.4g}",
                     xy=best, xytext=(15, 15), textcoords="offset points",
@@ -447,7 +524,8 @@ class PlotWidget(QWidget):
                 )
                 self._annotations.append(ann)
                 self.canvas.draw_idle()
-            except: pass
+        except:
+            traceback.print_exc()
 
     def _on_scroll(self, event):
         ax = event.inaxes

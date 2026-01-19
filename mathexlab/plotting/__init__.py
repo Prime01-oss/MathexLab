@@ -57,7 +57,8 @@ from .plot3d import (
     view,
     axis as axis3,
     shading,
-    # [FIX] Added zlabel and zlim
+    # [FIX] Ensure lighting/camlight/zlabel are exported
+    lighting, camlight,
     zlabel, zlim,
     # NEW PHYSICS
     quiver3
@@ -124,7 +125,7 @@ __all__ = [
     "imagesc", "imshow", "heatmap",
     "gscatter", "plotmatrix",
     "subplot", "title", "xlabel", "ylabel", "zlabel",
-    "grid", "xlim", "ylim", "zlim", "axis",  # [FIX] Added zlim here
+    "grid", "xlim", "ylim", "zlim", "axis", 
     "colorbar", "legend",
     # New 2D
     "quiver", "streamline", "colormap", "caxis",
@@ -136,6 +137,7 @@ __all__ = [
     "view", "axis3", "shading",
     # New 3D
     "quiver3",
+    "lighting", "camlight",
 
     # figures
     "figure", "gcf", "clf", "close", "closeall", "hold",

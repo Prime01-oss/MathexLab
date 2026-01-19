@@ -156,7 +156,11 @@ class PlotStateManager:
                         pass
 
                     # 2. Delete old
-                    fig_state.widget.figure.delaxes(ax)
+                    try:
+                        fig_state.widget.figure.delaxes(ax)
+                    except Exception:
+                        pass
+                        
                     if ax in fig_state.axes_state:
                         del fig_state.axes_state[ax]
                     
@@ -173,6 +177,14 @@ class PlotStateManager:
                     else:
                         ax = fig_state.widget.new_axes(projection="3d" if is_3d else None)
                     
+                    # [PARANOIA CHECK] Ensure the new axes actually matches the request
+                    # Matplotlib might recycle a slot and give back a 2D axes.
+                    new_is_3d = getattr(ax, 'name', '') == '3d'
+                    if is_3d and not new_is_3d:
+                        try: fig_state.widget.figure.delaxes(ax)
+                        except: pass
+                        ax = fig_state.widget.new_axes(projection='3d')
+
                     # 4. Update state
                     fig_state.current_axes = ax
                     fig_state.axes_state[ax] = _AxesState()
@@ -248,14 +260,23 @@ class PlotStateManager:
         # Verify 3D compatibility
         current_is_3d = getattr(ax, 'name', '') == '3d'
         
+        # [FIX] Smart Hold Logic:
+        # If we are holding, and the current axes is 3D, allow 2D plots (like title, text)
+        # to draw on it without destroying the 3D axes.
+        state = fig.axes_state.get(ax)
+        is_hold = state.hold if state else False
+
+        if is_hold and current_is_3d and not is_3d:
+            # Allow 2D plot on 3D axes
+            return ax
+        
+        # Otherwise, strictly enforce type
         if is_3d and not current_is_3d:
             return self.gca(is_3d=True)
         
         if not is_3d and current_is_3d:
             return self.gca(is_3d=False)
 
-        state = fig.axes_state.get(ax)
-        
         if state and not state.hold:
             try:
                 ax.clear()
@@ -341,7 +362,9 @@ class PlotStateManager:
 
         if state.tight:
             try:
-                fig.widget.figure.tight_layout()
+                # [CRITICAL FIX] axis tight must NOT call figure.tight_layout()
+                # It should only set the axes limits to match data.
+                ax.autoscale(enable=True, axis='both', tight=True)
             except Exception:
                 pass
 

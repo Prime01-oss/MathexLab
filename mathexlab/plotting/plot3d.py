@@ -31,6 +31,15 @@ def _unwrap(arg):
         return np.asarray(arg)
     return arg
 
+def _unwrap_1d(arg):
+    """
+    Force unwrapped data into a 1D numpy array.
+    Crucial for plot3/scatter3 to avoid Matplotlib Line3D initialization errors.
+    """
+    data = _unwrap(arg)
+    # Flatten allows (1, N) or (N, 1) or (N,) to become (N,)
+    return np.asarray(data).flatten()
+
 
 def _map_matlab_kwargs(kwargs):
     mapping = {
@@ -55,6 +64,76 @@ def _map_matlab_kwargs(kwargs):
         out[mapping.get(key, key)] = _unwrap(v)
     return out
 
+def _is_format_string(s):
+    """Check if a string is a valid Matplotlib format string (e.g., 'r--', 'bo')."""
+    if not isinstance(s, str):
+        return False
+    # Basic set of valid characters for colors, markers, and line styles
+    valid = set("rgbcmykw" + "o+*.xsd^v><ph" + "-:")
+    return 1 <= len(s) <= 4 and set(s).issubset(valid)
+
+def _parse_plot3_args(args):
+    """
+    Parses *args for plot3 to separate data/fmt from Name-Value pairs.
+    Handles: plot3(x,y,z, 'r', 'LineWidth', 2)
+    """
+    data_args = []
+    kw = {}
+    
+    i = 0
+    n = len(args)
+    while i < n:
+        arg = _unwrap(args[i])
+        
+        # Check if this is a Name-Value pair (String that isn't a fmt string)
+        if isinstance(arg, str) and not _is_format_string(arg):
+            # Ensure there is a value following the name
+            if i + 1 < n:
+                key = arg
+                val = args[i+1]
+                kw[key] = val
+                i += 2
+                continue
+            else:
+                data_args.append(arg)
+                i += 1
+        else:
+            # It's data (x, y, z) or a format string ('r', '--')
+            data_args.append(arg)
+            i += 1
+            
+    return data_args, _map_matlab_kwargs(kw)
+
+def _parse_surf_args(args):
+    """
+    Parses *args for surf/mesh.
+    Distinguishes between Data (Z or X,Y,Z) and Name-Value pairs.
+    Does NOT support format strings (surf doesn't use 'r--').
+    """
+    data_args = []
+    kw = {}
+    
+    i = 0
+    n = len(args)
+    while i < n:
+        arg = _unwrap(args[i])
+        
+        # If we hit a string that looks like a property name, assume start of kwargs
+        if isinstance(arg, str):
+            if i + 1 < n:
+                key = arg
+                val = args[i+1]
+                kw[key] = val
+                i += 2
+                continue
+            else:
+                i += 1
+        else:
+            data_args.append(arg)
+            i += 1
+
+    return data_args, _map_matlab_kwargs(kw)
+
 
 # ============================================================
 # CORE 3D PLOTS
@@ -65,12 +144,20 @@ def plot3(x, y, z, *args, **kwargs):
     if ax is None:
         return
 
+    # [FIX] Parse args to handle 'LineWidth', 2 etc.
+    extra_data, extra_kw = _parse_plot3_args(args)
+    
+    # Merge explicit kwargs with parsed Name-Value pairs
+    final_kw = _map_matlab_kwargs(kwargs)
+    final_kw.update(extra_kw)
+
+    # [FIX] Force inputs to 1D arrays to prevent Line3D shape errors
     lines = ax.plot(
-        _unwrap(x),
-        _unwrap(y),
-        _unwrap(z),
-        *args,
-        **_map_matlab_kwargs(kwargs),
+        _unwrap_1d(x),
+        _unwrap_1d(y),
+        _unwrap_1d(z),
+        *extra_data,
+        **final_kw,
     )
     plot_manager.request_draw()
     
@@ -83,12 +170,36 @@ def scatter3(x, y, z, *args, **kwargs):
     if ax is None:
         return
 
+    # [FIX] Parse args to handle Name-Value pairs for scatter
+    extra_data = []
+    kw = {}
+    
+    # Pre-process args to remove 'filled' and handle N-V pairs
+    raw_args = [_unwrap(a) for a in args]
+    i = 0
+    while i < len(raw_args):
+        arg = raw_args[i]
+        if isinstance(arg, str):
+            if arg.lower() == "filled":
+                i += 1
+                continue
+            elif not _is_format_string(arg) and i + 1 < len(raw_args):
+                kw[arg] = raw_args[i+1]
+                i += 2
+                continue
+        extra_data.append(arg)
+        i += 1
+
+    final_kw = _map_matlab_kwargs(kwargs)
+    final_kw.update(_map_matlab_kwargs(kw))
+
+    # [FIX] Force inputs to 1D arrays
     sc = ax.scatter(
-        _unwrap(x),
-        _unwrap(y),
-        _unwrap(z),
-        *args,
-        **_map_matlab_kwargs(kwargs),
+        _unwrap_1d(x),
+        _unwrap_1d(y),
+        _unwrap_1d(z),
+        *extra_data,
+        **final_kw,
     )
     plot_manager.request_draw()
     return ScatterHandle(sc, parent=ax)
@@ -100,8 +211,8 @@ def quiver3(x, y, z, u, v, w, **kwargs):
         return
 
     q = ax.quiver(
-        _unwrap(x), _unwrap(y), _unwrap(z),
-        _unwrap(u), _unwrap(v), _unwrap(w),
+        _unwrap_1d(x), _unwrap_1d(y), _unwrap_1d(z),
+        _unwrap_1d(u), _unwrap_1d(v), _unwrap_1d(w),
         **_map_matlab_kwargs(kwargs)
     )
     plot_manager.request_draw()
@@ -113,27 +224,24 @@ def quiver3(x, y, z, u, v, w, **kwargs):
 # ============================================================
 
 def text(x, y, z, s, **kwargs):
-    """
-    text(x, y, z, str) - Add text to 3D plot.
-    """
     ax = plot_manager.prepare_plot(is_3d=True)
     if ax is None: return
 
-    # Unwrap args
-    x = float(_unwrap(x)) if hasattr(_unwrap(x), 'item') else _unwrap(x)
-    y = float(_unwrap(y)) if hasattr(_unwrap(y), 'item') else _unwrap(y)
-    z = float(_unwrap(z)) if hasattr(_unwrap(z), 'item') else _unwrap(z)
-    s = str(_unwrap(s))
+    x_val = _unwrap(x)
+    y_val = _unwrap(y)
+    z_val = _unwrap(z)
     
-    # Map kwargs
+    if hasattr(x_val, 'item') and x_val.size == 1: x_val = x_val.item()
+    if hasattr(y_val, 'item') and y_val.size == 1: y_val = y_val.item()
+    if hasattr(z_val, 'item') and z_val.size == 1: z_val = z_val.item()
+
+    s = str(_unwrap(s))
     kw = _map_matlab_kwargs(kwargs)
     
-    # Defaults for MATLAB look
     if 'fontsize' not in kw: kw['fontsize'] = 10
-    if 'color' not in kw: kw['color'] = '#eeeeee' # Default to light text in dark theme
+    if 'color' not in kw: kw['color'] = '#eeeeee' 
     
-    # Matplotlib 3D text uses the same .text() method but with z dir
-    t = ax.text(x, y, z, s, **kw)
+    t = ax.text(float(x_val), float(y_val), float(z_val), s, **kw)
     plot_manager.request_draw()
     return TextHandle(t, parent=ax)
 
@@ -146,27 +254,33 @@ def surf(*args, **kwargs):
     """
     surf(Z)
     surf(X, Y, Z)
+    surf(..., Name, Value)
     """
     ax = plot_manager.prepare_plot(is_3d=True)
     if ax is None:
         return
 
-    # Handle single-argument surf(Z)
-    unwrapped = [_unwrap(a) for a in args]
+    # [FIX] Separate Data from Name-Value pairs
+    data_args, extra_kw = _parse_surf_args(args)
     
-    if len(unwrapped) == 1:
+    # Merge kwargs
+    mpl_kwargs = _map_matlab_kwargs(kwargs)
+    mpl_kwargs.update(extra_kw)
+
+    # Determine X, Y, Z
+    if len(data_args) == 1:
         # surf(Z) -> generate X, Y indices
-        Z = np.asarray(unwrapped[0])
+        Z = np.asarray(data_args[0])
         rows, cols = Z.shape
         X, Y = np.meshgrid(np.arange(cols), np.arange(rows))
-    elif len(unwrapped) == 3:
-        # surf(X, Y, Z)
-        X, Y, Z = unwrapped
+    elif len(data_args) >= 3:
+        # surf(X, Y, Z, [C])
+        X, Y, Z = np.asarray(data_args[0]), np.asarray(data_args[1]), np.asarray(data_args[2])
     else:
+        # Invalid arguments
         return
 
-    mpl_kwargs = _map_matlab_kwargs(kwargs)
-    
+    # Defaults
     if 'cmap' not in mpl_kwargs and 'color' not in mpl_kwargs:
         mpl_kwargs['cmap'] = 'turbo'
     
@@ -175,6 +289,10 @@ def surf(*args, **kwargs):
         
     if 'antialiased' not in mpl_kwargs:
         mpl_kwargs['antialiased'] = False
+
+    # [FIX] Remove 'color' if 'cmap' is present (mutually exclusive in plot_surface sometimes)
+    if 'cmap' in mpl_kwargs and 'color' in mpl_kwargs:
+        mpl_kwargs.pop('color')
 
     poly = ax.plot_surface(X, Y, Z, **mpl_kwargs)
     plot_manager.request_draw()
@@ -185,24 +303,27 @@ def mesh(*args, **kwargs):
     """
     mesh(Z)
     mesh(X, Y, Z)
+    mesh(..., Name, Value)
     """
     ax = plot_manager.prepare_plot(is_3d=True)
     if ax is None:
         return
 
-    # Handle single-argument mesh(Z)
-    unwrapped = [_unwrap(a) for a in args]
+    # [FIX] Separate Data from Name-Value pairs
+    data_args, extra_kw = _parse_surf_args(args)
     
-    if len(unwrapped) == 1:
-        Z = np.asarray(unwrapped[0])
+    # Merge kwargs
+    mpl_kwargs = _map_matlab_kwargs(kwargs)
+    mpl_kwargs.update(extra_kw)
+
+    if len(data_args) == 1:
+        Z = np.asarray(data_args[0])
         rows, cols = Z.shape
         X, Y = np.meshgrid(np.arange(cols), np.arange(rows))
-    elif len(unwrapped) == 3:
-        X, Y, Z = unwrapped
+    elif len(data_args) >= 3:
+        X, Y, Z = np.asarray(data_args[0]), np.asarray(data_args[1]), np.asarray(data_args[2])
     else:
         return
-
-    mpl_kwargs = _map_matlab_kwargs(kwargs)
     
     if 'cmap' not in mpl_kwargs:
         mpl_kwargs['cmap'] = 'turbo'
@@ -316,11 +437,15 @@ def zlim(lim):
     """
     ax = plot_manager.gca(is_3d=True)
     if ax:
-        # [FIX] Flatten to ensure Matplotlib receives exactly 2 args,
-        # avoiding "ValueError: not enough values to unpack" with 2D arrays.
-        val = np.asarray(_unwrap(lim)).flatten()
-        if val.size >= 2:
-            ax.set_zlim(val[0], val[1])
+        # [FIX] Ensure Matplotlib gets float args
+        try:
+            val = np.asarray(_unwrap(lim)).flatten()
+            if val.size >= 2:
+                # Check for 3D compatibility to avoid AttributeErrors
+                if hasattr(ax, 'set_zlim'):
+                    ax.set_zlim(val[0], val[1])
+        except Exception:
+            pass
         plot_manager.request_draw()
 
 
@@ -339,7 +464,9 @@ def axis(mode):
         if arr.size >= 6:
             ax.set_xlim(arr[0], arr[1])
             ax.set_ylim(arr[2], arr[3])
-            ax.set_zlim(arr[4], arr[5])
+            # [FIX] Check for 3D capability before setting Z limits
+            if hasattr(ax, 'set_zlim'):
+                ax.set_zlim(arr[4], arr[5])
     else:
         # String mode
         try:
@@ -402,6 +529,7 @@ def ylabel(t):
 
 def zlabel(t):
     ax = plot_manager.gca(is_3d=True)
-    if ax:
+    # [FIX] Check for 3D capability before setting label
+    if ax and hasattr(ax, 'set_zlabel'):
         ax.set_zlabel(str(_unwrap(t)))
         plot_manager.request_draw()

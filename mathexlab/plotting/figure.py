@@ -106,37 +106,82 @@ plot_manager.set_figure_creator(_auto_create_figure)
 # Public API
 # ------------------------------------------------------------------
 
-def figure(num: Optional[int] = None, **kwargs) -> int:
+def figure(*args, **kwargs) -> int:
     """
     Select or create a figure.
 
-    figure()      -> Figure 1
-    figure(n)     -> Figure n
+    figure()                  -> Figure 1
+    figure(n)                 -> Figure n
+    figure(..., 'Prop', Val)  -> Set properties (Name, Color)
     """
+    num = None
+
+    # 1. Support explicit 'num' kwarg (Backward compatibility)
+    if 'num' in kwargs:
+        try:
+            num = int(kwargs.pop('num'))
+        except Exception:
+            pass
+
+    # 2. Parse positional arguments
+    props = kwargs.copy()
+    start_idx = 0
+
+    if num is None and len(args) > 0:
+        first = args[0]
+        # Check if first argument is a figure number
+        # Logic: If it's a number, it's the ID. If it's a string, it's a property key.
+        try:
+            if isinstance(first, (int, float)):
+                num = int(first)
+                start_idx = 1
+        except Exception:
+            pass
+
+    # Default to Figure 1 if no number provided
     if num is None:
         num = 1
 
-    try:
-        num = int(num)
-    except Exception:
-        num = 1
+    # 3. Extract Key-Value pairs from remaining variable arguments
+    # e.g. figure('Color', 'w') -> args=['Color', 'w']
+    remaining_args = args[start_idx:]
+    for i in range(0, len(remaining_args), 2):
+        if i + 1 < len(remaining_args):
+            k = remaining_args[i]
+            v = remaining_args[i+1]
+            if isinstance(k, str):
+                props[k] = v
 
+    # 4. Activate the figure
     _activate(num)
 
-    # Optional future: Name handling
-    name = kwargs.get("Name") or kwargs.get("name")
-    if name:
-        try:
-            widget = _figures[num]
-            # Headless widget might not have setWindowTitle
+    # 5. Apply supported properties
+    try:
+        widget = _figures[num]
+        
+        # 'Name': Window Title
+        name = props.get("Name") or props.get("name")
+        if name:
             if hasattr(widget, "setWindowTitle"):
                 widget.setWindowTitle(str(name))
             elif hasattr(widget, "parent"):
                  p = widget.parent()
                  if hasattr(p, "setWindowTitle"):
                      p.setWindowTitle(str(name))
-        except Exception:
-            pass
+
+        # 'Color': Figure Background Color
+        color = props.get("Color") or props.get("color")
+        if color:
+            fig = getattr(widget, "figure", None)
+            if fig:
+                fig.set_facecolor(color)
+                # Force re-draw if canvas exists
+                if hasattr(widget, "canvas"):
+                    try: widget.canvas.draw_idle()
+                    except: pass
+
+    except Exception:
+        pass
 
     return num
 
