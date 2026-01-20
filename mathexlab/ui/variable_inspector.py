@@ -1,205 +1,167 @@
-# mathexlab/ui/variable_inspector.py
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView, QLabel
+    QDialog, QVBoxLayout, QTableView, QHeaderView, QLabel
 )
-from PySide6.QtCore import Qt, Signal  # [FIX] Added Signal
-from PySide6.QtGui import QColor
+from PySide6.QtCore import Qt, Signal, QAbstractTableModel, QModelIndex
 import numpy as np
 
+class ArrayModel(QAbstractTableModel):
+    """
+    Virtual Model that allows displaying 1,000,000+ cells instantly.
+    It reads directly from the numpy array without creating sub-objects.
+    """
+    def __init__(self, data):
+        super().__init__()
+        self._data = data
+
+    def rowCount(self, parent=QModelIndex()):
+        if self._data is None: return 0
+        if self._data.ndim == 0: return 1
+        return self._data.shape[0]
+
+    def columnCount(self, parent=QModelIndex()):
+        if self._data is None: return 0
+        if self._data.ndim < 2: return 1
+        return self._data.shape[1]
+
+    def data(self, index, role=Qt.DisplayRole):
+        if not index.isValid(): return None
+        
+        row, col = index.row(), index.column()
+
+        if role == Qt.DisplayRole or role == Qt.EditRole:
+            # Safe Access logic
+            if self._data.ndim == 0:
+                val = self._data[()]
+            elif self._data.ndim == 1:
+                val = self._data[row]
+            else:
+                val = self._data[row, col]
+                
+            # Formatting
+            if isinstance(val, (float, np.floating)):
+                return f"{val:.5f}"
+            if isinstance(val, (complex, np.complexfloating)):
+                return f"{val.real:.3f}+{val.imag:.3f}j"
+            return str(val)
+            
+        return None
+
+    def setData(self, index, value, role=Qt.EditRole):
+        if not index.isValid() or role != Qt.EditRole: return False
+        
+        row, col = index.row(), index.column()
+        
+        try:
+            # Simple Type Inference
+            if 'j' in value: new_val = complex(value)
+            elif '.' in value: new_val = float(value)
+            else: new_val = int(value)
+            
+            if self._data.ndim == 0:
+                self._data[()] = new_val
+            elif self._data.ndim == 1:
+                self._data[row] = new_val
+            else:
+                self._data[row, col] = new_val
+            
+            self.dataChanged.emit(index, index, [Qt.DisplayRole])
+            return True
+        except ValueError:
+            return False
+
+    def flags(self, index):
+        return Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable
+
+    def headerData(self, section, orientation, role):
+        if role == Qt.DisplayRole:
+            # MATLAB uses 1-based indexing for headers
+            return str(section + 1)
+        return None
 
 class VariableInspector(QDialog):
     """
-    Shows the contents of a workspace variable in a grid (MATLAB-like).
-    Supports editing values.
+    High-Performance Variable Inspector (Virtual Mode).
     """
-    
-    # [NEW] Signal to notify parent that the variable has been modified
     value_changed = Signal(object)
 
     def __init__(self, name, value, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"Variable Inspector: {name}")
-        self.resize(650, 450)
+        self.resize(700, 500)
         
-        # Keep references to source data for editing
         self.var_name = name
-        self.var_value = value 
-        self._is_loading = False # Prevent update loops
-
-        layout = QVBoxLayout(self)
         
-        # Info Label for Slicing Status
-        self.info_label = QLabel("")
-        self.info_label.setStyleSheet("color: #888; font-style: italic; margin-bottom: 4px;")
-        layout.addWidget(self.info_label)
+        # Unwrap MatlabArray/MathexLab types to get raw storage
+        self.raw_data = value._data if hasattr(value, "_data") else value
+        
+        # Ensure NumPy array for the model
+        if not isinstance(self.raw_data, np.ndarray):
+            self.raw_data = np.array(self.raw_data)
 
-        self.table = QTableWidget()
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0,0,0,0)
+        
+        # Info Label
+        self.info_label = QLabel()
+        self.info_label.setStyleSheet("""
+            background-color: #252526; 
+            color: #888; 
+            font-style: italic; 
+            padding: 5px;
+            border-bottom: 1px solid #333;
+        """)
+        self.layout.addWidget(self.info_label)
+
+        # High-Performance Table View
+        self.table = QTableView()
         self.table.setStyleSheet("""
-            QTableWidget {
+            QTableView {
                 background-color: #1e1e1e;
                 color: #ffffff;
-                gridline-color: #555;
+                gridline-color: #444;
                 selection-background-color: #264f78;
-                selection-color: white;
+                border: none;
             }
             QHeaderView::section {
                 background-color: #2b2b2b;
-                color: #cccccc;
+                color: #ccc;
                 padding: 4px;
+                border: 1px solid #333;
+            }
+            QTableCornerButton::section {
+                background-color: #2b2b2b;
+                border: 1px solid #333;
             }
         """)
-        layout.addWidget(self.table)
+        self.layout.addWidget(self.table)
         
-        # Connect edit signal
-        self.table.itemChanged.connect(self._on_item_changed)
+        self.load_data()
 
-        self.load_data(value)
-
-    def load_data(self, value):
-        self._is_loading = True # Block signals while loading
-        self.info_label.setText("") # Reset label
+    def load_data(self):
+        arr = self.raw_data
         
-        # Unwrap MatlabArray if present
-        if hasattr(value, "_data"):
-            data = value._data
-        else:
-            data = value
-
-        # Convert to numpy array when possible for display logic
-        try:
-            arr = np.array(data)
-        except Exception:
-            arr = None
-
-        # CASE 1: Scalar or None
-        if arr is None or np.isscalar(arr) or arr.ndim == 0:
-            self.table.setRowCount(1)
-            self.table.setColumnCount(1)
-            self.table.setHorizontalHeaderLabels(["Value"])
-            self.table.setVerticalHeaderLabels(["1"])
-            self._set_item(0, 0, data)
-            self._is_loading = False
-            return
-
-        # CASE 2: 1D Vector
-        if arr.ndim == 1:
-            n = len(arr)
-            self.table.setRowCount(n)
-            self.table.setColumnCount(1)
-            self.table.setHorizontalHeaderLabels(["Value"])
-            self.table.setVerticalHeaderLabels([str(i + 1) for i in range(n)])
-            for i, v in enumerate(arr):
-                self._set_item(i, 0, v)
-
-        # CASE 3: 2D Matrix
-        elif arr.ndim == 2:
-            rows, cols = arr.shape
-            self.table.setRowCount(rows)
-            self.table.setColumnCount(cols)
-            self.table.setHorizontalHeaderLabels([str(i + 1) for i in range(cols)])
-            self.table.setVerticalHeaderLabels([str(i + 1) for i in range(rows)])
-            for r in range(rows):
-                for c in range(cols):
-                    self._set_item(r, c, arr[r, c])
-
-        # CASE 4: ND Arrays (Slice View)
-        else:
-            # We will show the first 2D slice: arr[:, :, 0, 0...]
+        # Handle Slicing for ND Arrays (Show first 2D slice)
+        if arr.ndim > 2:
+            extra_dims = arr.ndim - 2
             view_arr = arr
+            # Peel dimensions until 2D
+            for _ in range(extra_dims): view_arr = view_arr[..., 0]
             
-            # Peel layers until we have 2D
-            extra_dims_count = arr.ndim - 2
-            for _ in range(extra_dims_count):
-                if view_arr.ndim > 2:
-                    view_arr = view_arr[..., 0] 
-
-            # Double check we are down to 2D
-            while view_arr.ndim > 2:
-                view_arr = view_arr[0]
-            
-            # Update Info Label
-            slice_desc = f"[:,:,{','.join(['0']*extra_dims_count)}]"
-            self.info_label.setText(f"Showing slice {slice_desc} of {arr.shape} array. Read-only view.")
-            self.setWindowTitle(f"Variable Inspector: {self.var_name} (Slice View)")
-
-            rows, cols = view_arr.shape
-            self.table.setRowCount(rows)
-            self.table.setColumnCount(cols)
-            self.table.setHorizontalHeaderLabels([str(i + 1) for i in range(cols)])
-            self.table.setVerticalHeaderLabels([str(i + 1) for i in range(rows)])
-            
-            for r in range(rows):
-                for c in range(cols):
-                    item = QTableWidgetItem(self.format_val(view_arr[r, c]))
-                    item.setFlags(item.flags() ^ Qt.ItemIsEditable) 
-                    self.table.setItem(r, c, item)
-
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self._is_loading = False
-
-    def _set_item(self, r, c, val):
-        """Helper to set item and enable editing."""
-        item = QTableWidgetItem(self.format_val(val))
-        item.setFlags(item.flags() | Qt.ItemIsEditable)
-        self.table.setItem(r, c, item)
-
-    def format_val(self, v):
-        if isinstance(v, (float, np.floating)):
-            return f"{v:.6f}"
-        return str(v)
-
-    def _on_item_changed(self, item):
-        """Handle user edits."""
-        if self._is_loading: return
-        
-        row = item.row()
-        col = item.column()
-        text = item.text()
-        
-        # 1. Parse Input
-        try:
-            if 'j' in text: new_val = complex(text)
-            elif '.' in text: new_val = float(text)
-            else: new_val = int(text)
-        except ValueError:
-            return # Ignore invalid input
-
-        # 2. Update Source Data
-        target = self.var_value
-        updated = False
-
-        if hasattr(target, "_data"):
-            # Update MatlabArray data
-            d = target._data
-            if np.isscalar(d) or (isinstance(d, np.ndarray) and d.ndim == 0):
-                # Wrapped Scalar: We update the internal data if possible, or replace
-                if isinstance(d, np.ndarray):
-                    d[()] = new_val # Update 0-d array in place
-                    updated = True
-                else:
-                    # Immutable python type inside wrapper -> Must update wrapper
-                    target._data = new_val
-                    updated = True
-            elif d.ndim == 1:
-                d[row] = new_val
-                updated = True
-            elif d.ndim == 2:
-                d[row, col] = new_val
-                updated = True
-        elif isinstance(target, np.ndarray):
-            # Pure Numpy Array
-            if target.ndim == 1:
-                target[row] = new_val
-                updated = True
-            elif target.ndim == 2:
-                target[row, col] = new_val
-                updated = True
+            slice_desc = f"[:,:,{','.join(['0']*extra_dims)}]"
+            self.info_label.setText(f" {slice_desc} of {arr.shape}")
+            self.model = ArrayModel(view_arr)
         else:
-            # Pure Python Scalar (int/float/complex)
-            # These are immutable, so we must replace 'self.var_value' entirely
-            self.var_value = new_val
-            updated = True
+            self.model = ArrayModel(arr)
+            self.info_label.setText(f" Size: {arr.shape}")
+
+        self.table.setModel(self.model)
         
-        # 3. Emit Signal to Workspace
-        if updated:
-            self.value_changed.emit(self.var_value)
+        # Connect Edit Signal
+        self.model.dataChanged.connect(self._on_data_changed)
+    
+    def _on_data_changed(self):
+        # Notify workspace of changes
+        # Since the model modifies the numpy array in-place, 
+        # the original wrapper in the workspace is already updated.
+        # We simply emit the signal to trigger any necessary refreshes.
+        self.value_changed.emit(self.raw_data)
