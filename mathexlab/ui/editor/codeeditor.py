@@ -24,7 +24,7 @@ class CodeEditor(QPlainTextEdit):
 
         self.setStyleSheet("""
             QPlainTextEdit {
-                background-color: #1e1e1e;
+                background-color: #181818;
                 color: #d4d4d4;
                 border: none;
                 selection-background-color: #264f78;

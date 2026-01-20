@@ -57,18 +57,7 @@ class ScriptEditor(QTabWidget):
             self, "Open File", "", "MATLAB Files (*.m);;All Files (*)"
         )
         if file_path:
-            try:
-                text = Path(file_path).read_text(encoding='utf-8')
-                
-                editor = CodeEditor()
-                editor.setPlainText(text)
-                editor.filename = file_path
-                
-                idx = self.addTab(editor, Path(file_path).name)
-                self.setCurrentIndex(idx)
-                editor.setFocus()
-            except Exception as e:
-                print(f"Error opening file: {e}")
+            self.open_file_by_path(file_path)
 
     def save_current(self):
         editor = self.current_editor()
@@ -110,7 +99,7 @@ class ScriptEditor(QTabWidget):
         if self.count() > 1:
             self.removeTab(index)
         else:
-            # Optional: if they close the last tab, just clear it or make a new one
+            # If they close the last tab, just clear it or make a new one
             self.removeTab(index)
             self.new_file()
 
@@ -120,22 +109,6 @@ class ScriptEditor(QTabWidget):
 
     def get_current_filename(self):
         return self.tabText(self.currentIndex())
-    
-    def open_file_by_path(self, path_str):
-        path = Path(path_str)
-        if not path.exists(): return
-        
-        try:
-            text = path.read_text(encoding='utf-8')
-            editor = CodeEditor()
-            editor.setPlainText(text)
-            editor.filename = str(path)
-            
-            idx = self.addTab(editor, path.name)
-            self.setCurrentIndex(idx)
-            editor.setFocus()
-        except Exception as e:
-            print(f"Error opening file: {e}")
 
     def open_file_by_path(self, file_path):
         """Opens a specific file path directly without a dialog."""
@@ -162,3 +135,13 @@ class ScriptEditor(QTabWidget):
             editor.setFocus()
         except Exception as e:
             print(f"Error opening file: {e}")
+
+    # [NEW] Helper to get all open files for session restore
+    def get_open_filepaths(self):
+        paths = []
+        for i in range(self.count()):
+            editor = self.widget(i)
+            # Only save tabs that point to actual files
+            if hasattr(editor, 'filename') and editor.filename:
+                paths.append(editor.filename)
+        return paths
