@@ -1,7 +1,9 @@
-# mathexlab/ui/menus.py
 from PySide6.QtWidgets import QMenuBar, QMessageBox
 from PySide6.QtGui import QAction
 from PySide6.QtCore import QObject, Signal
+
+# [NEW] Import the Guide Dialog
+from .guide import GuideDialog
 
 class MenuSignals(QObject):
     new_file = Signal()
@@ -27,6 +29,7 @@ class MenuSignals(QObject):
 class MainMenuBar(QMenuBar):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.parent_window = parent  # Keep reference for dialog parenting
         self.signals = MenuSignals()
         self.build_menus()
 
@@ -132,9 +135,26 @@ class MainMenuBar(QMenuBar):
 
         # ---------- HELP ----------
         help_menu = self.addMenu("Help")
+        
+        # [NEW] User Guide Action
+        guide_act = QAction("User Guide", self)
+        guide_act.setShortcut("F1")
+        guide_act.triggered.connect(self._show_guide)
+        help_menu.addAction(guide_act)
+        
+        help_menu.addSeparator()
+        
         help_action = QAction("About MathexLab", self)
         help_action.triggered.connect(self._show_about)
         help_menu.addAction(help_action)
+
+    # [NEW] Helper to show the guide
+    def _show_guide(self):
+        try:
+            dialog = GuideDialog(self.parent_window)
+            dialog.exec()
+        except Exception as e:
+            print(f"Error launching guide: {e}")
 
     def _show_about(self):
         QMessageBox.about(
@@ -144,4 +164,5 @@ class MainMenuBar(QMenuBar):
             "<p>A professional, MATLAB-compatible Python IDE.</p>"
             "<p><b>Version:</b> 0.1.0-Alpha</p>"
             "<p>Built with PySide6 & NumPy.</p>"
+            "<p>Author: <b>Samarjit Patar</b></p>"
         )
