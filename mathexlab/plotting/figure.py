@@ -198,12 +198,37 @@ def gcf():
 def clf():
     """
     Clear current figure contents (MATLAB clf).
+    This function forces a backend reset to handle mixed 3D/2D layouts.
     """
     _ensure_figure_1()
+    
+    # 1. Clear MathexLab internal state (lines, hold state, etc.)
     try:
         plot_manager.clf()
     except Exception:
         pass
+
+    # 2. [CRITICAL FIX] Force Clear the Backend Widget
+    # This ensures the screen is wiped even if the plot_manager thinks it's already done.
+    widget = _figures.get(_current)
+    if widget:
+        # Check if it's a real Qt widget or Headless
+        if hasattr(widget, 'clear'):
+            # Use the robust clear method from mpl_backend (reset layout modes)
+            widget.clear()
+        
+        # Explicitly grab figure/canvas for manual override if needed
+        fig = getattr(widget, 'figure', None)
+        if fig:
+            # Ensure background stays dark (Matplotlib clf defaults to white/grey)
+            fig.set_facecolor('#1e1e1e')
+            
+        canvas = getattr(widget, 'canvas', None)
+        if canvas:
+            try:
+                canvas.draw_idle()
+            except Exception:
+                pass
 
 
 def close(target: Union[int, str, None] = None):
@@ -223,11 +248,16 @@ def close(target: Union[int, str, None] = None):
     if isinstance(target, str) and target.lower() == "all":
         for n in list(_figures.keys()):
             if n == 1:
+                # For UI figure, just clear it, don't destroy
+                clf()
                 continue
+            
             w = _figures.pop(n, None)
-            if w and hasattr(w, "setParent"):
+            if w:
                 try:
-                    w.setParent(None)
+                    # Qt cleanup
+                    if hasattr(w, "close"): w.close()
+                    if hasattr(w, "setParent"): w.setParent(None)
                 except Exception:
                     pass
         _activate(1)
@@ -245,9 +275,10 @@ def close(target: Union[int, str, None] = None):
         return
 
     w = _figures.pop(n, None)
-    if w and hasattr(w, "setParent"):
+    if w:
         try:
-            w.setParent(None)
+            if hasattr(w, "close"): w.close() 
+            if hasattr(w, "setParent"): w.setParent(None)
         except Exception:
             pass
 
