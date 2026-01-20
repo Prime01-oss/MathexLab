@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QHeaderView, QAbstractItemView
 )
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QBrush
 import types
 
 # IMPORT THE INSPECTOR
@@ -21,7 +21,7 @@ class WorkspaceWidget(QWidget):
     save_requested = Signal()
     load_requested = Signal()
     
-    # [NEW] Signal emitted when a variable is modified in the inspector
+    # Signal emitted when a variable is modified in the inspector
     variable_edited = Signal(str, object)
 
     def __init__(self):
@@ -84,12 +84,12 @@ class WorkspaceWidget(QWidget):
             QTableWidget {
                 background-color: #1e1e1e;
                 color: #cccccc;
-                gridline-color: #444444; 
+                gridline-color: #333333; 
                 border: none;
             }
             QTableWidget::item { padding: 4px; border-bottom: 1px solid #2d2d2d; }
             QHeaderView::section {
-                background-color: #2d2d2d;
+                background-color: #252526;
                 color: #cccccc;
                 padding: 4px;
                 border: 1px solid #333333;
@@ -114,7 +114,11 @@ class WorkspaceWidget(QWidget):
         vars_to_show = {}
         for k, v in self.current_globals.items():
             if k.startswith('_'): continue
-            if callable(v) or isinstance(v, type) or isinstance(v, types.ModuleType): continue
+            
+            # [MODIFIED] Show functions but hide standard Python modules (like 'os', 'sys')
+            if isinstance(v, types.ModuleType): 
+                continue
+                
             if query in k.lower():
                 vars_to_show[k] = v
         
@@ -122,9 +126,30 @@ class WorkspaceWidget(QWidget):
         
         error_color = QColor("#ff5555")
         
+        # [NEW] Define "Shades of Dark" for row backgrounds
+        bg_func = QColor("#2a2b2e")   # Lighter, slightly cool dark for functions
+        bg_char = QColor("#232323")   # Subtle difference for strings/text
+        bg_var  = QColor("#1e1e1e")   # Standard deep dark for variables
+        
+        # Text color for function values (dimmed)
+        func_val_color = QColor("#777777")
+
         for row, (name, val) in enumerate(sorted(vars_to_show.items())):
-            self.table.setItem(row, 0, QTableWidgetItem(name))
+            # 1. Determine Type & Background Color
+            is_matlab_array = hasattr(val, '_data') and hasattr(val, 'shape')
+            is_func = not is_matlab_array and (callable(val) or isinstance(val, type))
+            is_str = isinstance(val, str)
             
+            if is_func:   row_bg = bg_func
+            elif is_str:  row_bg = bg_char
+            else:         row_bg = bg_var
+
+            # 2. Name Column
+            item_name = QTableWidgetItem(name)
+            item_name.setBackground(row_bg)
+            self.table.setItem(row, 0, item_name)
+            
+            # 3. Value Column
             try: 
                 val_str = self._format_value(val)
                 is_error = False
@@ -132,22 +157,48 @@ class WorkspaceWidget(QWidget):
                 val_str = "Error"
                 is_error = True
             
-            value_item = QTableWidgetItem(val_str)
-            if is_error or val_str == "Error":
-                value_item.setForeground(error_color)
-                value_item.setToolTip("Unable to display value")
-
-            self.table.setItem(row, 1, value_item)
+            item_val = QTableWidgetItem(val_str)
+            item_val.setBackground(row_bg)
             
+            if is_error or val_str == "Error":
+                item_val.setForeground(error_color)
+                item_val.setToolTip("Unable to display value")
+            elif is_func:
+                # Dim the function value text (e.g. <function_handle>)
+                item_val.setForeground(func_val_color)
+
+            self.table.setItem(row, 1, item_val)
+            
+            # 4. Class Column (MATLAB Naming)
             t_name = type(val).__name__
             if t_name == 'MatlabArray': t_name = 'double'
-            self.table.setItem(row, 2, QTableWidgetItem(t_name))
+            elif is_func: t_name = 'function_handle'
+            elif is_str: t_name = 'char'
+            elif t_name == 'list': t_name = 'cell' # Python list roughly maps to cell array conceptually
+            
+            item_class = QTableWidgetItem(t_name)
+            item_class.setBackground(row_bg)
+            self.table.setItem(row, 2, item_class)
 
     def _format_value(self, val):
+        # Arrays/Shapes
         if hasattr(val, 'shape'):
              if isinstance(val.shape, (tuple, list)):
-                 return f"{'x'.join(map(str, val.shape))} {type(val).__name__}"
-        if isinstance(val, (int, float, complex)): return str(val)
+                 dims = 'x'.join(map(str, val.shape))
+                 # If it's small, show value? For now, stick to standard workspace summary
+                 return f"<{dims} double>" 
+        
+        # Numbers
+        if isinstance(val, (int, float, complex)): 
+            return str(val)
+        
+        # Functions
+        if callable(val) and not hasattr(val, '_data'): 
+            # If it has a __name__, show it, otherwise generic handle
+            if hasattr(val, '__name__'):
+                return f"@{val.__name__}"
+            return "<function_handle>"
+            
         return str(val)[:50]
 
     # --- INSPECTOR LOGIC ---
@@ -162,7 +213,7 @@ class WorkspaceWidget(QWidget):
             # Launch Inspector
             dlg = VariableInspector(name, val, self)
             
-            # [NEW] Handle edits
+            # Handle edits
             dlg.value_changed.connect(lambda new_val: self._handle_var_update(name, new_val))
             
             dlg.exec()
