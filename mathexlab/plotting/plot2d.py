@@ -628,10 +628,26 @@ def legend(*args, **kwargs):
     ax = plot_manager.gca()
     if ax:
         labels = [_unwrap(x) for x in args if isinstance(_unwrap(x), str)]
+        kw = _map_matlab_kwargs(kwargs)
+        
+        # [FIX] Explicitly grab handles if labels are provided.
+        # This fixes the issue where legend('A','B') failed because
+        # handles weren't associated with the labels automatically.
         if labels:
-            ax.legend(labels, **_map_matlab_kwargs(kwargs))
+            handles = []
+            handles.extend(ax.lines)
+            handles.extend(ax.collections)
+            handles.extend(ax.patches)
+            
+            if handles:
+                # Assign labels to handles in order
+                ax.legend(handles=handles[:len(labels)], labels=labels, **kw)
+            else:
+                ax.legend(labels, **kw)
         else:
-            ax.legend(**_map_matlab_kwargs(kwargs))
+            # Auto-legend
+            ax.legend(**kw)
+            
         plot_manager.request_draw()
 
 
