@@ -18,6 +18,7 @@ import warnings
 import traceback
 import logging
 import time
+import os
 
 # [FIX] Essential for 3D plotting to work
 try:
@@ -31,10 +32,11 @@ except ImportError:
 # Conditional imports for Headless mode support
 try:
     from PySide6.QtWidgets import (
-        QWidget, QVBoxLayout, QLabel, QSizePolicy, QHBoxLayout, QFrame, QSpacerItem
+        QWidget, QVBoxLayout, QLabel, QSizePolicy, QHBoxLayout, QFrame, QSpacerItem,
+        QToolButton, QFileDialog, QMessageBox
     )
-    from PySide6.QtCore import Qt
-    from PySide6.QtGui import QColor, QPalette, QFont
+    from PySide6.QtCore import Qt, QSize, QTimer
+    from PySide6.QtGui import QColor, QPalette, QFont, QIcon, QPixmap, QPainter, QImage, QResizeEvent
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
     from matplotlib.backend_bases import MouseButton
     HAS_QT = True
@@ -65,46 +67,119 @@ def _unwrap(v):
 
 
 # ============================================================
-# Custom Canvas (The Ironclad Fix)
+# Custom Canvas (The Ironclad Fix + Optimization)
 # ============================================================
 
 if HAS_QT:
     class MathexLabCanvas(FigureCanvasQTAgg):
         """
-        Custom Canvas that intercepts the draw call to sanitize 3D objects
-        caused by Matplotlib version mismatches (v3.8+ vs mpl_toolkits).
+        Custom Canvas that intercepts the draw call to:
+        1. Sanitize 3D objects (version mismatch fix).
+        2. Capture frames for Animation Recording.
+        3. Optimize Resize Performance.
+        4. [CRITICAL] Enforce Full-Screen Layout on every frame.
         """
+        def __init__(self, figure):
+            super().__init__(figure)
+            self._is_recording = False
+            self._frames = []
+            
+            # [PERFORMANCE] Resize Throttler
+            self._resize_timer = QTimer()
+            self._resize_timer.setSingleShot(True)
+            self._resize_timer.setInterval(50) # 50ms delay
+            self._resize_timer.timeout.connect(self._delayed_resize_draw)
+
+        def resizeEvent(self, event):
+            """Override resizeEvent to debounce the expensive draw call."""
+            super(FigureCanvasQTAgg, self).resizeEvent(event)
+            self._resize_timer.start()
+
+        def _delayed_resize_draw(self):
+            """Called when resize interaction settles."""
+            try:
+                self.draw_idle()
+            except:
+                pass
+
+        def start_recording(self):
+            self._frames = []
+            self._is_recording = True
+            
+        def stop_recording(self):
+            self._is_recording = False
+            return list(self._frames) # Return copy
+
         def draw(self):
-            # [CRITICAL] Sanitize BEFORE passing control to the backend renderer
-            self._sanitize_3d_artists()
+            # [PERFORMANCE] Only sanitize if we actually have 3D content
+            has_3d = HAS_MPL_3D and hasattr(self.figure, 'axes') and self.figure.axes
+            if has_3d:
+                 self._sanitize_3d_artists()
+                 
+                 # [CRITICAL FIX] Enforce Full Screen Layout for Single 3D Plot
+                 # This overrides any internal layout engine resets during resize/draw.
+                 if len(self.figure.axes) == 1:
+                     ax = self.figure.axes[0]
+                     if getattr(ax, 'name', '') == '3d':
+                         # 1. HARD DISABLE Layout Engine to prevent 'snap back'
+                         if hasattr(self.figure, 'set_layout_engine'):
+                             self.figure.set_layout_engine('none')
+                         elif hasattr(self.figure, 'set_constrained_layout'):
+                             self.figure.set_constrained_layout(False)
+
+                         # 2. Force Axes to occupy 100% of figure
+                         # [0,0,1,1] means 0% left/bottom margin, 100% width/height
+                         ax.set_position([0, 0, 1, 1], which='both')
+
             try:
                 super().draw()
+                
+                # [NEW] Animation Capture Hook
+                if self._is_recording:
+                    self._capture_frame()
+                    
             except Exception:
-                # If it still crashes, log it but don't kill the app
                 traceback.print_exc()
+
+        def _capture_frame(self):
+            """Grabs the current render as an image."""
+            try:
+                pix = self.grab()
+                self._frames.append(pix.toImage())
+            except Exception:
+                pass
 
         def _sanitize_3d_artists(self):
             """
-            Runtime Patcher for Line3D attributes.
-            Ensures _axlim_clip and _verts3d exist to prevent AttributeError.
+            Runtime Patcher for 3D attributes.
+            [CRITICAL FIX] Aggressively prunes 'Zombie' artists (axes=None) to prevent crash.
             """
-            if not HAS_MPL_3D: return
-
             try:
-                # Iterate over all axes in the figure
                 for ax in self.figure.axes:
-                    # Check if it's a 3D axis (has 'zaxis')
                     if hasattr(ax, 'zaxis'):
-                        # Check all lines in this axis
+                        # -----------------------------------------------------------
+                        # 1. PRUNE ZOMBIE ARTISTS (Fix for Crash: 'NoneType' object has no attribute 'M')
+                        # -----------------------------------------------------------
+                        for list_name in ['lines', 'collections', 'patches', 'artists', 'images', 'texts']:
+                            if not hasattr(ax, list_name): continue
+                            try:
+                                lst = getattr(ax, list_name)
+                                clean_lst = [a for a in lst if getattr(a, 'axes', None) is not None]
+                                if len(clean_lst) < len(lst):
+                                    lst[:] = clean_lst
+                            except Exception:
+                                pass
+
+                        # -----------------------------------------------------------
+                        # 2. FIX LINE3D ATTRIBUTES (Optimize Rotation)
+                        # -----------------------------------------------------------
                         for line in ax.lines:
                             if isinstance(line, Line3D):
-                                # Fix 1: Missing _axlim_clip
+                                if hasattr(line, '_axlim_clip') and hasattr(line, '_verts3d'):
+                                    continue
                                 if not hasattr(line, '_axlim_clip'):
                                     line._axlim_clip = False
-                                
-                                # Fix 2: Missing _verts3d (Critical for drawing)
                                 if not hasattr(line, '_verts3d'):
-                                    # Initialize with empty data to prevent crash
                                     line._verts3d = ([], [], [])
             except Exception:
                 pass
@@ -118,8 +193,9 @@ if HAS_QT:
     class StableToolbar(NavigationToolbar2QT):
         """
         A 'Rock Solid' toolbar.
-        - Transparent coordinate background.
-        - Right-aligned coordinates via Spacer.
+        - [FIXED] Record button placed BESIDE other buttons.
+        - [FIXED] Coordinates pushed to far right.
+        - [FIXED] Coordinates visible even on small windows (Policy: Minimum).
         """
         def __init__(self, canvas, parent):
             super().__init__(canvas, parent)
@@ -144,34 +220,35 @@ if HAS_QT:
                     border: 1px solid #555555;
                 }
                 QToolButton:pressed {
-                    background-color: #007acc;
+                    background-color: #005f9e;
                     color: white;
                 }
-                /* [FIX] Transparent background for coordinates */
+                QToolButton:checked {
+                    background-color: #094771; 
+                    border: 1px solid #007acc;
+                    color: white;
+                }
                 QLabel {
                     color: #eeeeee;
                     background-color: transparent;
                     border: none;
-                    font-family: "Segoe UI", "Helvetica", sans-serif;
+                    /* [FIX] Monospace font prevents jitter when numbers change */
+                    font-family: "Consolas", "Monospace", "Courier New";
                     font-size: 11px;
                     font-weight: bold;
                     padding-right: 10px;
                 }
             """)
 
-            # 2. REMOVE CLUTTER
-            unwanted = ["Subplots", "Customize", "Save"]
-            for action in self.actions():
-                if action.text() in unwanted:
-                    self.removeAction(action)
-            
-            # 3. [FIX] FORCE RIGHT ALIGNMENT (Qt-Safe Method)
+            # 2. CREATE RECORD BUTTON
+            self.record_action = self.addAction("Record")
+            self.record_action.setToolTip("Record Animation (Save as GIF)")
+            self.record_action.setCheckable(True)
+            self.record_action.triggered.connect(self._toggle_recording)
+            self._update_record_icon(False)
+
+            # 3. [LAYOUT FIX] REORDER ACTIONS
             try:
-                empty = QWidget()
-                empty.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-                empty.setStyleSheet("background: transparent;")
-                
-                # Find the action for the coordinates label
                 label_action = None
                 if hasattr(self, 'locLabel'):
                     for action in self.actions():
@@ -179,44 +256,108 @@ if HAS_QT:
                             label_action = action
                             break
                 
-                # Insert spacer before the label
                 if label_action:
+                    self.removeAction(self.record_action)
+                    self.insertAction(label_action, self.record_action)
+                    
+                    empty = QWidget()
+                    empty.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+                    empty.setStyleSheet("background: transparent;")
                     self.insertWidget(label_action, empty)
                 else:
+                    empty = QWidget()
+                    empty.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
                     self.addWidget(empty)
             except Exception:
                 pass
 
-            # Ensure label styling allows alignment
+            # 4. [CRITICAL FIX] STABILIZE & FORCE VISIBILITY OF COORDINATES
             if hasattr(self, 'locLabel'):
                 self.locLabel.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                self.locLabel.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
+                self.locLabel.setMinimumWidth(80) 
+
+        def _update_record_icon(self, is_recording):
+            """Creates a programmatic icon for the record button."""
+            size = 24
+            pix = QPixmap(size, size)
+            pix.fill(Qt.transparent)
+            painter = QPainter(pix)
+            painter.setRenderHint(QPainter.Antialiasing)
+            
+            if is_recording:
+                painter.setBrush(QColor("#ff5555"))
+                painter.setPen(Qt.NoPen)
+                painter.drawRect(6, 6, 12, 12)
+            else:
+                painter.setBrush(QColor("#cccccc"))
+                painter.setPen(Qt.NoPen)
+                painter.drawEllipse(6, 6, 12, 12)
+                
+            painter.end()
+            self.record_action.setIcon(QIcon(pix))
+
+        def _toggle_recording(self, checked):
+            self._update_record_icon(checked)
+            if checked:
+                self.canvas.start_recording()
+            else:
+                frames = self.canvas.stop_recording()
+                if not frames:
+                    QMessageBox.information(self, "No Frames", "No animation frames were captured.")
+                    return
+                self._save_recording(frames)
+
+        def _save_recording(self, qimages):
+            try:
+                from PIL import Image
+            except ImportError:
+                QMessageBox.warning(self, "Missing Dependency", "Pillow (PIL) is required to save GIFs.")
+                return
+
+            path, _ = QFileDialog.getSaveFileName(self, "Save Animation", "", "GIF Image (*.gif)")
+            if not path:
+                return
+            
+            try:
+                pil_frames = []
+                for qimg in qimages:
+                    qimg = qimg.convertToFormat(QImage.Format_RGBA8888)
+                    width = qimg.width()
+                    height = qimg.height()
+                    ptr = qimg.bits()
+                    if hasattr(ptr, "tobytes"):
+                        arr = ptr.tobytes()
+                    else:
+                        arr = ptr.asstring(width * height * 4)
+                    img = Image.frombuffer("RGBA", (width, height), arr, "raw", "RGBA", 0, 1)
+                    pil_frames.append(img)
+
+                pil_frames[0].save(
+                    path, save_all=True, append_images=pil_frames[1:],
+                    optimize=False, duration=50, loop=0
+                )
+                QMessageBox.information(self, "Success", f"Animation saved to:\n{path}")
+            except Exception as e:
+                traceback.print_exc()
+                QMessageBox.critical(self, "Save Failed", f"Could not save GIF:\n{str(e)}")
 
         def set_message(self, s):
-            """Update coordinates."""
-            # [CRITICAL] Call super so the internal label text is updated
             super().set_message(s)
-            
             if hasattr(self, 'locLabel'):
                 self.locLabel.setVisible(True)
-                # Cleanup text format
                 if self.coordinates:
                     txt = self.locLabel.text()
                     self.locLabel.setText(txt.replace(', ', '  '))
 
         def home(self, *args, **kwargs):
-            """
-            [FIX] Smart Home Reset.
-            """
             super().home(*args, **kwargs)
-            
-            # Check if we need to enforce 3D aspect ratio
             has_3d = any(getattr(ax, 'name', '') == '3d' for ax in self.canvas.figure.axes)
             if has_3d:
                 for ax in self.canvas.figure.axes:
                     if getattr(ax, 'name', '') == '3d':
                         try: ax.set_box_aspect((1, 1, 1))
                         except: pass
-            
             self.canvas.draw_idle()
 
 
@@ -246,10 +387,9 @@ class PlotWidget(QWidget):
         # -------------------------------------------------------
         # 1. Appearance / Defaults (Global Polish)
         # -------------------------------------------------------
-        # [FIX] Set default colors here so clf() resets to DARK, not WHITE
         plt.rcParams.update({
-            'figure.autolayout': False,             # Disable legacy tight_layout
-            'figure.constrained_layout.use': True,  # Default to Constrained for 2D
+            'figure.autolayout': False,             
+            'figure.constrained_layout.use': False, # [FIX] Force OFF by default
             'path.simplify': True,           
             'path.simplify_threshold': 1.0,  
             'lines.antialiased': True,       
@@ -258,13 +398,11 @@ class PlotWidget(QWidget):
             'ytick.direction': 'in',         
             'font.family': 'sans-serif',
             'font.size': 10,
-            
-            # Dark Theme Defaults (Critical for proper clf() behavior)
             'figure.facecolor': '#1e1e1e',
             'figure.edgecolor': '#1e1e1e',
             'savefig.facecolor': '#1e1e1e',
             'savefig.edgecolor': '#1e1e1e',
-            'axes.facecolor': '#252526',
+            'axes.facecolor': '#1e1e1e', 
             'axes.edgecolor': '#666666',
             'axes.labelcolor': '#eeeeee',
             'xtick.color': '#cccccc',
@@ -277,17 +415,14 @@ class PlotWidget(QWidget):
         # -------------------------------------------------------
         # 2. Figure / Canvas
         # -------------------------------------------------------
-        try:
-            self.figure = Figure(figsize=(6, 4), dpi=100, layout='constrained')
-            self._current_layout_mode = '2d'
-        except Exception:
-            self.figure = Figure(figsize=(6, 4), dpi=100, constrained_layout=True)
+        # [FIX] Do NOT init with layout='constrained'. 
+        # We must control this manually to allow full-screen 3D.
+        self.figure = Figure(figsize=(6, 4), dpi=100)
+        self._current_layout_mode = None 
             
         self.figure.patch.set_facecolor("#1e1e1e")
         
-        # [FIX] Use Custom Canvas class here!
         self.canvas = MathexLabCanvas(self.figure)
-        
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.canvas.updateGeometry()
 
@@ -311,7 +446,6 @@ class PlotWidget(QWidget):
         self._line_points = []
         self._annotations = []
 
-        # Connect events
         try:
             self.canvas.mpl_connect("scroll_event", self._on_scroll)
             self.canvas.mpl_connect("button_press_event", self._on_button_press)
@@ -320,6 +454,9 @@ class PlotWidget(QWidget):
             self.canvas.mpl_connect("button_press_event", self._on_click_for_datacursor)
         except Exception:
             pass
+        
+        # [FIX] Apply default 2D layout on startup so it looks good immediately
+        self.configure_layout(is_3d=False)
 
     # -------------------------------------------------------
     # PUBLIC Layout API (Called by state.py)
@@ -327,22 +464,24 @@ class PlotWidget(QWidget):
 
     def configure_layout(self, is_3d: bool):
         """
-        Atomically switches layout logic between 2D (Constrained) and 3D (Manual).
-        Must be called BEFORE adding axes to the figure.
+        Atomically switches layout logic.
         """
         target_mode = '3d' if is_3d else '2d'
         
-        # Optimization: Don't re-apply if state hasn't changed
         if self._current_layout_mode == target_mode:
+            # Force layout refresh for 3D just in case
+            if is_3d and len(self.figure.axes) == 1:
+                try: self.figure.axes[0].set_position([0, 0, 1, 1])
+                except: pass
             return
 
-        # 1. Disable current engine to unlock everything
+        # 1. Disable current engine
         if hasattr(self.figure, 'set_layout_engine'):
             self.figure.set_layout_engine('none')
         elif hasattr(self.figure, 'set_constrained_layout'):
             self.figure.set_constrained_layout(False)
 
-        # 2. Reset margins to Defaults (Crucial to un-stick 3D settings)
+        # 2. Reset margins
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             try:
@@ -352,15 +491,17 @@ class PlotWidget(QWidget):
 
         # 3. Apply New Mode
         if target_mode == '3d':
-            # 3D: Manual Margins (Prevents Jitter)
+            # 3D: ZERO Margins (Full Viewport Size)
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 try:
-                    self.figure.subplots_adjust(left=0.05, right=0.95, bottom=0.05, top=0.95)
+                    self.figure.subplots_adjust(left=0, right=1, bottom=0, top=1, wspace=0, hspace=0)
+                    if len(self.figure.axes) == 1:
+                        self.figure.axes[0].set_position([0, 0, 1, 1])
                 except Exception:
                     pass
         else:
-            # 2D: Enable Constrained Layout (Prevents Overlap)
+            # 2D: Enable Constrained Layout
             if hasattr(self.figure, 'set_layout_engine'):
                 self.figure.set_layout_engine('constrained')
             elif hasattr(self.figure, 'set_constrained_layout'):
@@ -382,7 +523,6 @@ class PlotWidget(QWidget):
 
     def new_axes(self, projection=None):
         is_3d = (projection == '3d')
-        # Ensure layout is correct
         self.configure_layout(is_3d)
 
         try:
@@ -396,8 +536,7 @@ class PlotWidget(QWidget):
     def _apply_axes_defaults(self, ax):
         try:
             ax._mathex_styled = True
-            # [FIX] Enforce dark facecolor explicitly
-            ax.set_facecolor("#252526")
+            ax.set_facecolor("#1e1e1e")
             ax.tick_params(axis="both", colors="#cccccc", which='both', labelsize=9)
             
             for spine in ax.spines.values():
@@ -407,10 +546,19 @@ class PlotWidget(QWidget):
             ax.grid(True, linestyle=':', linewidth=0.5, color='#444444', alpha=0.8)
 
             if getattr(ax, 'name', '') == '3d':
+                # Force Absolute Position for 3D
+                if len(self.figure.axes) == 1:
+                    ax.set_position([0, 0, 1, 1])
+
+                # [FIX] Enforce Cubic Aspect Ratio
                 try: ax.set_box_aspect((1, 1, 1))
                 except: pass
                 
-                pane_color = (0.145, 0.145, 0.149, 1.0) 
+                # [FIX] Zoom Camera Out (13 is good to avoid clipping)
+                try: ax.dist = 13
+                except: pass
+                
+                pane_color = (0.118, 0.118, 0.118, 1.0) # #1e1e1e
                 if hasattr(ax, 'xaxis'): ax.xaxis.set_pane_color(pane_color)
                 if hasattr(ax, 'yaxis'): ax.yaxis.set_pane_color(pane_color)
                 if hasattr(ax, 'zaxis'): ax.zaxis.set_pane_color(pane_color)
@@ -425,7 +573,6 @@ class PlotWidget(QWidget):
                 if hasattr(ax, 'zaxis'): ax.zaxis.label.set_color("#eeeeee")
 
         except Exception as e:
-            # [FIX] Print error instead of swallowing it
             traceback.print_exc()
 
     # -------------------------------------------------------
@@ -444,7 +591,6 @@ class PlotWidget(QWidget):
                 else:
                     self.canvas.draw_idle()
         except Exception:
-            # [FIX] Show render errors
             traceback.print_exc()
 
     def savefig(self, path, **kwargs):
@@ -456,17 +602,19 @@ class PlotWidget(QWidget):
             return False
 
     def clear(self):
-        """Clear figure and RESET layout state to default 2D."""
         try:
-            self.figure.clf()
+            if hasattr(self.figure, 'set_layout_engine'):
+                self.figure.set_layout_engine('none')
+            elif hasattr(self.figure, 'set_constrained_layout'):
+                self.figure.set_constrained_layout(False)
             
-            # [FIX] Re-apply dark background immediately after clear
+            self.figure.clf()
             self.figure.patch.set_facecolor("#1e1e1e")
             
-            # [RESET] Force clean 2D state for next plot
             self._current_layout_mode = None
             self.configure_layout(is_3d=False)
             
+            self.canvas.draw()
         except Exception:
             traceback.print_exc()
 
@@ -528,16 +676,57 @@ class PlotWidget(QWidget):
             traceback.print_exc()
 
     def _on_scroll(self, event):
+        # -------------------------------------------------------------
+        # 1. 3D Zoom Strategy (Global Figure Scope)
+        # -------------------------------------------------------------
+        # In 3D plots, 'event.inaxes' is unreliable (often None).
+        # We detect if a 3D axis exists and zoom it regardless of cursor pos.
+        ax_3d = None
+        for ax in self.figure.axes:
+            if getattr(ax, 'name', '') == '3d':
+                ax_3d = ax
+                break
+
+        if ax_3d is not None:
+            # Sensitivity: 0.9 (In) / 1.1 (Out)
+            factor = 0.9 if event.button == 'up' else 1.1
+            try:
+                # Modifying 'dist' moves the camera. 
+                # Default is usually ~10. Lower = Closer.
+                ax_3d.dist = ax_3d.dist * factor
+            except Exception:
+                pass
+            
+            self.canvas.draw_idle()
+            return 
+
+        # -------------------------------------------------------------
+        # 2. 2D Zoom Strategy (Local Axes Scope)
+        # -------------------------------------------------------------
         ax = event.inaxes
-        if ax is None or getattr(ax, 'name', '') == '3d': return
+        if ax is None: return
+
+        # Safety check for coordinates
+        if event.xdata is None or event.ydata is None: return
+
         scale = 1.15 if event.button == "up" else 1.0/1.15
-        xlim, ylim = ax.get_xlim(), ax.get_ylim()
-        x, y = event.xdata, event.ydata
-        new_w, new_h = (xlim[1]-xlim[0])*scale, (ylim[1]-ylim[0])*scale
-        rx, ry = (x-xlim[0])/(xlim[1]-xlim[0]), (y-ylim[0])/(ylim[1]-ylim[0])
-        ax.set_xlim([x - new_w * rx, x + new_w * (1-rx)])
-        ax.set_ylim([y - new_h * ry, y + new_h * (1-ry)])
-        self.canvas.draw_idle()
+        
+        try:
+            xlim, ylim = ax.get_xlim(), ax.get_ylim()
+            x, y = event.xdata, event.ydata
+            
+            new_w = (xlim[1]-xlim[0]) * scale
+            new_h = (ylim[1]-ylim[0]) * scale
+            
+            rx = (x - xlim[0]) / (xlim[1] - xlim[0])
+            ry = (y - ylim[0]) / (ylim[1] - ylim[0])
+            
+            ax.set_xlim([x - new_w * rx, x + new_w * (1-rx)])
+            ax.set_ylim([y - new_h * ry, y + new_h * (1-ry)])
+            
+            self.canvas.draw_idle()
+        except Exception:
+            pass
 
     def _on_button_press(self, event):
         if event.button == 3:
