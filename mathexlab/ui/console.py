@@ -23,7 +23,7 @@ class ConsoleWidget(QPlainTextEdit):
     # ------------------------------------------------------------
     # VISUAL CONSTANTS (STRICT COLOR RULES)
     # ------------------------------------------------------------
-    COLOR_BG = "#1e1e1e"
+    COLOR_BG = "#181818"
     
     # Text meant for output and the '>>' prompt is WHITE
     COLOR_TRANSCRIPT = "#ffffff"  
