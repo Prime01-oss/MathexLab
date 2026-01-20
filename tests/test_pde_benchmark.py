@@ -71,10 +71,10 @@ def test_pde_solver_speed():
     # Numba (Cold):  ~4-7s (Compilation + Exec)
     # Numba (Warm):  ~0.5-1.5s (Exec only)
     failure_message = (
-        f"Too Slow! took {duration:.2f}s (Limit: 3.0s). "
+        f"Too Slow! took {duration:.2f}s (Limit: 2.0s). "
         "Numba JIT vectorization is likely not active or efficient."
     )
-    assert duration < 3.0, failure_message
+    assert duration < 2.0, failure_message
 
 if __name__ == "__main__":
     pytest.main(["-s", __file__])
