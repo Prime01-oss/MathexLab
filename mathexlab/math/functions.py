@@ -1,7 +1,7 @@
 # mathexlab/math/functions.py
 import numpy as np
 import scipy.special
-import sympy  # <--- NEW: Required for symbolic math dispatch
+import sympy 
 from .arrays import MatlabArray
 
 def _unwrap(x):
@@ -12,7 +12,6 @@ def _is_symbolic(x):
     """Check if x is a SymPy object (symbol, expression) or contains them."""
     if isinstance(x, (sympy.Basic, sympy.Symbol)):
         return True
-    # Handle object arrays (e.g. matrix of symbols)
     if isinstance(x, np.ndarray) and x.dtype == object:
         return x.size > 0 and isinstance(x.flat[0], (sympy.Basic, sympy.Symbol))
     return False
@@ -92,39 +91,24 @@ def exp(x):
     return MatlabArray(np.exp(val))
 
 def log(x):
-    """
-    MATLAB-style Natural Logarithm.
-    - Automatically returns complex results for negative inputs.
-    - Returns -Inf for 0 without RuntimeWarning.
-    """
     val = _unwrap(x)
     if _is_symbolic(val): return sympy.log(val)
-    
-    # [FIX] Use scimath for automatic complex domain & suppress warnings
+    # [FIX] Automatic complex domain handling for log(-1)
     with np.errstate(divide='ignore', invalid='ignore'):
         res = np.lib.scimath.log(val)
-        
     return MatlabArray(res)
 
 def log10(x):
-    """
-    MATLAB-style Base-10 Logarithm.
-    - Automatically returns complex results for negative inputs.
-    - Returns -Inf for 0 without RuntimeWarning.
-    """
     val = _unwrap(x)
     if _is_symbolic(val): return sympy.log(val, 10)
-    
-    # [FIX] Use scimath for automatic complex domain & suppress warnings
     with np.errstate(divide='ignore', invalid='ignore'):
         res = np.lib.scimath.log10(val)
-        
     return MatlabArray(res)
 
 def sqrt(x):
     val = _unwrap(x)
     if _is_symbolic(val): return sympy.sqrt(val)
-    # [Improvement] Handle sqrt(-1) -> complex automatically
+    # [FIX] Automatic complex domain handling for sqrt(-1)
     with np.errstate(invalid='ignore'):
         res = np.lib.scimath.sqrt(val)
     return MatlabArray(res)
@@ -140,35 +124,52 @@ def sign(x):
     return MatlabArray(np.sign(val))
 
 # ===========================================================
-# Matrix / Vector Ops (Structural, unlikely to be symbolic)
+# Complex Numbers [NEW - FIXES THE CRASH]
+# ===========================================================
+
+def angle(x):
+    """Phase angle of complex number."""
+    val = _unwrap(x)
+    if _is_symbolic(val): return sympy.arg(val)
+    return MatlabArray(np.angle(val))
+
+def real(x):
+    """Real part of complex number."""
+    val = _unwrap(x)
+    if _is_symbolic(val): return sympy.re(val)
+    return MatlabArray(np.real(val))
+
+def imag(x):
+    """Imaginary part of complex number."""
+    val = _unwrap(x)
+    if _is_symbolic(val): return sympy.im(val)
+    return MatlabArray(np.imag(val))
+
+def conj(x):
+    """Complex conjugate."""
+    val = _unwrap(x)
+    if _is_symbolic(val): return sympy.conjugate(val)
+    return MatlabArray(np.conjugate(val))
+
+# ===========================================================
+# Matrix / Vector Ops
 # ===========================================================
 def diag(v, k=0):
-    """
-    diag(v, k): vector -> diagonal matrix
-    diag(A, k): matrix -> column vector of diagonal
-    """
     val = _unwrap(v)
     k_val = int(_unwrap(k))
+    if _is_symbolic(val): pass 
     
-    # Check for symbolic matrix
-    if _is_symbolic(val):
-        pass # Fall through to numpy logic
-    
-    # Vector -> Matrix
     if hasattr(val, 'ndim') and val.ndim == 2 and (val.shape[0] == 1 or val.shape[1] == 1) and val.size > 0:
         val = val.flatten()
         return MatlabArray(np.diag(val, k_val))
     
-    # Matrix -> Vector (Column)
     if hasattr(val, 'ndim') and val.ndim == 0:
-        # Scalar case
         return MatlabArray(np.diag([val], k_val))
         
     try:
         res = np.diag(val, k_val)
         return MatlabArray(res.reshape(-1, 1))
     except Exception:
-        # Fallback for list input
         val = np.array(val)
         return MatlabArray(np.diag(val, k_val))
 
@@ -187,26 +188,22 @@ def ceil(x):
 
 def round(x):
     val = _unwrap(x)
-    # SymPy round is tricky, usually numerical evaluation
     if _is_symbolic(val): return round(val) 
     return MatlabArray(np.round(val))
 
 def fix(x):
     val = _unwrap(x)
-    # fix is round towards zero
-    if _is_symbolic(val): return sympy.integer_nthroot(val, 1)[0] # Approximation
+    if _is_symbolic(val): return sympy.integer_nthroot(val, 1)[0]
     return MatlabArray(np.fix(val))
 
 def rem(x, y):
     val_x, val_y = _unwrap(x), _unwrap(y)
-    if _is_symbolic(val_x) or _is_symbolic(val_y):
-        return val_x % val_y
+    if _is_symbolic(val_x) or _is_symbolic(val_y): return val_x % val_y
     return MatlabArray(np.remainder(val_x, val_y))
 
 def mod(x, y):
     val_x, val_y = _unwrap(x), _unwrap(y)
-    if _is_symbolic(val_x) or _is_symbolic(val_y):
-        return val_x % val_y
+    if _is_symbolic(val_x) or _is_symbolic(val_y): return val_x % val_y
     return MatlabArray(np.mod(val_x, val_y))
 
 # ===========================================================
