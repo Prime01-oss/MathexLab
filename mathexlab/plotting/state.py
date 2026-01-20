@@ -178,13 +178,17 @@ class PlotStateManager:
                         ax = fig_state.widget.new_axes(projection="3d" if is_3d else None)
                     
                     # [PARANOIA CHECK] Ensure the new axes actually matches the request
-                    # Matplotlib might recycle a slot and give back a 2D axes.
                     new_is_3d = getattr(ax, 'name', '') == '3d'
                     if is_3d and not new_is_3d:
                         try: fig_state.widget.figure.delaxes(ax)
                         except: pass
                         ax = fig_state.widget.new_axes(projection='3d')
 
+                    # [FIX] Re-apply styling (Backend handles geometry now)
+                    if hasattr(fig_state.widget, '_apply_axes_defaults'):
+                        try: fig_state.widget._apply_axes_defaults(ax)
+                        except: pass
+                    
                     # 4. Update state
                     fig_state.current_axes = ax
                     fig_state.axes_state[ax] = _AxesState()
@@ -206,7 +210,6 @@ class PlotStateManager:
         fig = fig_state.widget.figure
         
         # [CRITICAL FIX] Force backend to configure layout engine based on 'is_3d'
-        # This ensures margins are reset to defaults if we are switching back to 2D
         if hasattr(fig_state.widget, 'configure_layout'):
             fig_state.widget.configure_layout(is_3d=is_3d)
 
@@ -240,6 +243,11 @@ class PlotStateManager:
         except Exception:
             # Fallback to widget logic
             ax = fig_state.widget.new_axes(projection="3d" if is_3d else None)
+
+        # [FIX] Apply defaults
+        if hasattr(fig_state.widget, '_apply_axes_defaults'):
+            try: fig_state.widget._apply_axes_defaults(ax)
+            except: pass
 
         fig_state.current_axes = ax
         fig_state.axes_state.setdefault(ax, _AxesState())
@@ -280,6 +288,9 @@ class PlotStateManager:
         if state and not state.hold:
             try:
                 ax.clear()
+                # [FIX] Re-apply style after clear
+                if hasattr(fig.widget, '_apply_axes_defaults'):
+                    fig.widget._apply_axes_defaults(ax)
                 self._apply_axes_state(ax) 
             except Exception:
                 pass
