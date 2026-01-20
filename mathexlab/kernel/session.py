@@ -6,10 +6,11 @@ from mathexlab.kernel.path_manager import path_manager
 from mathexlab.kernel.loader import load_and_register
 from mathexlab.language.functions import registry
 
-# [FIX] Import PhysicalConstants directly
+# [FIX] Explicitly import constants to ensure they exist in session
 from mathexlab.math.physics import (
     physconst, constants_struct, PhysicalConstants,
-    convtemp, convlength, convmass, convforce, convpres, convenergy
+    convtemp, convlength, convmass, convforce, convpres, convenergy,
+    c, G, h, k, g  # Imported directly from physics.py
 )
 try:
     from PySide6.QtWidgets import QApplication
@@ -65,7 +66,9 @@ from mathexlab.toolbox import (
     roots, polyval, trapz, cumtrapz, integral,
     interp1, interp2, griddata,
     fftshift, ifftshift, spectrogram,
-    pdepe
+    pdepe,
+    # [NEW] Import new signal tools
+    fft2, ifft2, filter
 )
 
 # ------------------------------------------------------------
@@ -257,18 +260,16 @@ class KernelSession:
         if hbar_val is None:
              hbar_val = constants_struct.h / (2 * np.pi)
 
+        # [FIX] Use explicit imports for c, G, h, k to guarantee availability
         self.globals.update({
             "physconst": physconst,
             "PhysicalConstants": constants_struct,
-            
-            # Shortcuts
-            "c": constants_struct.c,
-            "G": constants_struct.G,
-            "h": constants_struct.h,
+            "c": c,       # From explicit import
+            "G": G,       # From explicit import
+            "h": h,       # From explicit import
             "hbar": hbar_val,
-            "k": constants_struct.k,
-            
-            # Unit Converters
+            "k": k,       # From explicit import
+            "g": g,       # From explicit import
             "convtemp": convtemp,
             "convlength": convlength,
             "convmass": convmass,
@@ -297,12 +298,35 @@ class KernelSession:
             "interp1": interp1, "interp2": interp2, "griddata": griddata,
             "fftshift": fftshift, "ifftshift": ifftshift, "spectrogram": spectrogram,
             "pdepe": pdepe,
+            # [NEW] Register Signal Tools
+            "fft2": fft2,
+            "ifft2": ifft2,
+            "filter": filter,
         })
 
-        # Math functions (auto-import)
+        # [CRITICAL FIX] Manually register core math functions.
+        # This guarantees they exist and are protected from 'clear'.
+        self.globals.update({
+            "sin": _mlfun.sin, "cos": _mlfun.cos, "tan": _mlfun.tan,
+            "asin": _mlfun.asin, "acos": _mlfun.acos, "atan": _mlfun.atan, "atan2": _mlfun.atan2,
+            "sinh": _mlfun.sinh, "cosh": _mlfun.cosh, "tanh": _mlfun.tanh,
+            "exp": _mlfun.exp, "log": _mlfun.log, "log10": _mlfun.log10, "sqrt": _mlfun.sqrt,
+            "abs": _mlfun.abs, "sign": _mlfun.sign,
+            "floor": _mlfun.floor, "ceil": _mlfun.ceil, "round": _mlfun.round, "fix": _mlfun.fix,
+            "mod": _mlfun.mod, "rem": _mlfun.rem,
+            
+            # COMPLEX NUMBER SUPPORT
+            "angle": _mlfun.angle,
+            "real": _mlfun.real,
+            "imag": _mlfun.imag,
+            "conj": _mlfun.conj,
+            "diag": _mlfun.diag,
+        })
+
+        # Auto-import remaining functions (backup)
         try:
             for name in dir(_mlfun):
-                if not name.startswith("_") and name not in ("MatlabArray", "scipy", "np", "sympy"):
+                if not name.startswith("_") and name not in self.globals and name not in ("MatlabArray", "scipy", "np", "sympy"):
                     self.globals[name] = getattr(_mlfun, name)
         except Exception:
             pass
@@ -346,19 +370,14 @@ class KernelSession:
                 rlocus 
             )
             self.globals.update({
-                "tf": tf,
-                "step": step,
-                "impulse": impulse,
-                "bode": bode,
-                "series": series,
-                "parallel": parallel,
-                "feedback": feedback,
-                "rlocus": rlocus,
+                "tf": tf, "step": step, "impulse": impulse,
+                "bode": bode, "series": series, "parallel": parallel,
+                "feedback": feedback, "rlocus": rlocus,
             })
         except ImportError:
             pass
         
-        # [FIX] Snapshot the built-in keys so we know what to PROTECT
+        # Snapshot built-ins to protect them from 'clear'
         self._builtins_set = set(self.globals.keys())
 
     def execute(self, code: str):
@@ -408,23 +427,18 @@ class KernelSession:
         if should_clear_all:
             # [FIX] Iterate over a COPY of the keys
             for k in list(self.globals.keys()):
-                # PROTECT built-ins and special keys
                 if k in self._builtins_set:
                     continue
-                if k == "ans": # Optional: Keep or clear 'ans'? MATLAB clears it.
+                if k == "ans": 
                     self.globals[k] = 0
                     continue
-                
-                # Delete user defined variable
                 try:
                     del self.globals[k]
                 except Exception:
                     pass
             return
 
-        # Specific variable clear
         for name in vars_to_clear:
-             # Prevent deleting built-ins by accident
              if name in self.globals and name not in self._builtins_set:
                  try: del self.globals[name]
                  except: pass
