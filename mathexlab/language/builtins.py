@@ -1,7 +1,9 @@
 import numpy as np
 import os
+import time
 from mathexlab.math.arrays import MatlabArray
 from mathexlab.math.structs import MatlabStruct
+from mathexlab.plotting.state import plot_manager
 
 # ==========================================================
 # MATLAB Built-ins
@@ -44,8 +46,6 @@ def deal(*args):
     [a, b] = deal(x, y)
     [a, b] = deal(x) % copies x to a and b
     """
-    # If 1 arg, just return it (Python automatically unpacks if assigning to multiple)
-    # If multiple args, return them as tuple (Python tuple = MATLAB multiple return values)
     if len(args) == 0:
         return None
     if len(args) == 1:
@@ -64,10 +64,46 @@ disp.__mathexlab_command__ = True
 
 def clc():
     # Print Form Feed (\f) which ConsoleWidget intercepts
-    # end="" prevents an extra newline from being printed after clear
     print("\f", end="")
 
 clc.__mathexlab_command__ = True
+
+
+# --- ANIMATION COMMANDS (NEW) ---
+
+def drawnow():
+    """
+    drawnow;
+    Update figures and process callbacks.
+    """
+    # immediate=True: tells backend to flush events
+    # wait=True: blocks Kernel thread until UI thread confirms draw is done
+    plot_manager.request_draw(immediate=True, wait=True)
+
+drawnow.__mathexlab_command__ = True
+
+
+def pause(n=None):
+    """
+    pause(n) - Pause for n seconds.
+    pause - Wait for user response (not fully impl, treats as 0.1s sleep)
+    """
+    # Always force a draw before pausing
+    drawnow()
+    
+    if n is None:
+        time.sleep(0.01)
+        return
+    
+    # n might be MatlabArray, cast to float
+    sec = float(n)
+    if sec > 0:
+        time.sleep(sec)
+
+pause.__mathexlab_command__ = True
+
+
+# --- END ANIMATION COMMANDS ---
 
 
 def size(x, dim=None):
@@ -101,7 +137,6 @@ def length(x):
     """
     if not hasattr(x, "shape"):
         return MatlabArray(1)
-    # Ensure we return a MatlabArray scalar
     return MatlabArray(max(x.shape) if x.shape else 1)
 
 
@@ -137,15 +172,12 @@ def whos(namespace):
         if name.startswith("__") or callable(val):
             continue
 
-        # Determine size string
         if hasattr(val, "shape"):
-            # Format shape tuple like 10x10 or 2x3x4
             dims = "x".join(str(d) for d in val.shape)
             size_str = dims
         else:
             size_str = "1x1"
 
-        # Determine class name
         if isinstance(val, MatlabArray):
             cls = "double" 
             if val.is_sparse:
@@ -171,30 +203,19 @@ whos.__mathexlab_command__ = True
 def exist(name, kind=None, namespace=None):
     """
     exist name [kind]
-    
-    Returns:
-      0: Not found
-      1: Variable in workspace
-      2: File (.m, .py, or ext-less)
-      7: Directory
     """
     if not isinstance(name, str):
         return 0
 
-    # 1. Check Variable (if namespace provided)
     if (kind == 'var' or kind is None) and namespace is not None:
         if name in namespace:
             return 1
             
-    # 2. Check File / Directory
-    # (Simple check, assumes current directory or absolute path)
     if kind == 'file' or kind == 'dir' or kind is None:
         if os.path.exists(name):
             if os.path.isdir(name):
                 return 7
             return 2
-        
-        # Check for .m extension implicit lookup
         if os.path.exists(name + ".m"):
             return 2
             
@@ -204,7 +225,6 @@ def exist(name, kind=None, namespace=None):
 def struct(*args):
     """
     s = struct('field1', val1, 'field2', val2, ...)
-    Supports creating structure arrays if values are cell arrays/lists.
     """
     if len(args) % 2 != 0:
         raise ValueError("struct requires field-value pairs.")
@@ -214,7 +234,6 @@ def struct(*args):
     max_len = 1
     has_cells = False
 
-    # 1. Parse args and check for lists (implied Cell Arrays)
     for i in range(0, len(args), 2):
         key = args[i]
         if isinstance(key, MatlabArray): key = str(key._data)
@@ -222,8 +241,6 @@ def struct(*args):
         
         val = args[i+1]
         
-        # Check if value is a list/tuple OR MatlabArray(dtype=object) which is a cell array
-        # This fixes the TypeError in test_struct_array
         if isinstance(val, MatlabArray) and val._data.dtype == object:
              val = val._data.flatten().tolist()
         
@@ -234,26 +251,21 @@ def struct(*args):
         keys.append(key)
         values.append(val)
 
-    # 2. Scalar Struct Case (No lists or empty)
     if not has_cells or max_len == 0:
         data = {k: v for k, v in zip(keys, values)}
         return MatlabStruct(**data)
 
-    # 3. Struct Array Case (Distribution)
-    # Create list of MatlabStructs
     struct_list = []
     for idx in range(max_len):
         data = {}
         for k, v in zip(keys, values):
-            # If v is a list, take v[idx], else replicate scalar
             if isinstance(v, (list, tuple)):
                 if idx < len(v):
                     data[k] = v[idx]
                 else:
-                    data[k] = None # MATLAB initializes missing to empty []
+                    data[k] = None
             else:
                 data[k] = v
         struct_list.append(MatlabStruct(**data))
 
-    # Return as a 1xN MatlabArray of Objects (Struct Array)
     return MatlabArray(np.array(struct_list, dtype=object).reshape(1, max_len))
