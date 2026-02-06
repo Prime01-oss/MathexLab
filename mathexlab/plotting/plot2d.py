@@ -477,14 +477,54 @@ def pcolor(*a, **k):
 
 
 def imagesc(*a, **k):
+    """
+    imagesc(C)
+    imagesc(x, y, C)
+    """
     ax = plot_manager.prepare_plot(is_3d=False)
     if ax is None:
         return
 
     aa, kk = _parse_args(a)
     kk.update(_map_matlab_kwargs(k))
-    ax.imshow(*aa, aspect="auto", origin="lower", **kk)
+
+    img_data = None
+
+    # CRITICAL FIX: Handle imagesc(x, y, C)
+    # Matplotlib imshow does not accept x, y as positional args
+    if len(aa) == 3:
+        x = _ensure_vector_flatness([aa[0]])[0]
+        y = _ensure_vector_flatness([aa[1]])[0]
+        img_data = _unwrap(aa[2])
+
+        # Map bounds to extent=[xmin, xmax, ymin, ymax]
+        if x.size > 1 and y.size > 1:
+            extent = [x.min(), x.max(), y.min(), y.max()]
+            kk['extent'] = extent
+    
+    elif len(aa) == 1:
+        img_data = _unwrap(aa[0])
+    
+    else:
+        # Fallback
+        if len(aa) > 0:
+            img_data = _unwrap(aa[0])
+
+    if img_data is None:
+        return
+
+    # Defaults matching MATLAB behavior
+    if 'aspect' not in kk:
+        kk['aspect'] = 'auto'
+    if 'origin' not in kk:
+        # 'lower' aligns with standard Cartesian coordinates (Mandelbrot)
+        kk['origin'] = 'lower'
+
+    im = ax.imshow(img_data, **kk)
+    
     plot_manager.request_draw()
+    # Return handle so set(h, 'CData', ...) works
+    return GraphicsHandle(im, parent=ax)
 
 
 def imshow(img, **k):
@@ -631,8 +671,6 @@ def legend(*args, **kwargs):
         kw = _map_matlab_kwargs(kwargs)
         
         # [FIX] Explicitly grab handles if labels are provided.
-        # This fixes the issue where legend('A','B') failed because
-        # handles weren't associated with the labels automatically.
         if labels:
             handles = []
             handles.extend(ax.lines)
