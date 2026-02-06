@@ -58,13 +58,17 @@ def _map_matlab_kwargs(kwargs):
         "EdgeColor": "edgecolor",
         "FaceAlpha": "alpha",
         "AlphaData": "alpha",
-        "String": "text",  # Map String -> text for direct kwarg usage if needed
+        "String": "text",
         "HorizontalAlignment": "horizontalalignment",
         "VerticalAlignment": "verticalalignment"
     }
     out = {}
     for k, v in kwargs.items():
-        key = k.strip("'") if isinstance(k, str) else k
+        # Defensive check: ensure key is string
+        if not isinstance(k, str):
+            continue
+            
+        key = k.strip("'")
         out[mapping.get(key, key)] = _unwrap(v)
     return out
 
@@ -93,20 +97,19 @@ class GraphicsHandle:
     def set(self, **kwargs):
         """
         set(h, 'Property', value, ...)
-        Supports live update of data: set(h, XData=..., YData=...)
+        Supports live update of data: set(h, XData=..., YData=..., CData=...)
         """
         # 1. Update internal props dict
         for k, v in kwargs.items():
-            self._props[k] = v
+            if isinstance(k, str):
+                self._props[k] = v
 
         # 2. Handle Data Updates (Explicit Matplotlib Mapping)
         if 'XData' in kwargs:
             try:
                 val = _ensure_flat_if_vector(kwargs['XData'])
-                # Lines/Scatter
                 if hasattr(self._artist, 'set_xdata'):
                     self._artist.set_xdata(val)
-                # Text Objects (use set_x or set_position)
                 if hasattr(self._artist, 'set_x'):
                     self._artist.set_x(val)
                 if hasattr(self._artist, 'set_position'):
@@ -119,10 +122,8 @@ class GraphicsHandle:
         if 'YData' in kwargs:
             try:
                 val = _ensure_flat_if_vector(kwargs['YData'])
-                # Lines/Scatter
                 if hasattr(self._artist, 'set_ydata'):
                     self._artist.set_ydata(val)
-                # Text Objects
                 if hasattr(self._artist, 'set_y'):
                     self._artist.set_y(val)
                 if hasattr(self._artist, 'set_position'):
@@ -135,21 +136,53 @@ class GraphicsHandle:
         if 'ZData' in kwargs:
             try:
                 val = _ensure_flat_if_vector(kwargs['ZData'])
-                # 3D lines in MPL use set_3d_properties for Z
                 if hasattr(self._artist, 'set_3d_properties'):
                     self._artist.set_3d_properties(val, 'z')
             except Exception:
                 pass
 
+        # --- FIX START: Handle CData (Color Data) ---
+        if 'CData' in kwargs:
+            try:
+                val = _unwrap(kwargs['CData'])
+                
+                # Case 1: Images (imagesc, imshow)
+                if hasattr(self._artist, 'set_data'):
+                    self._artist.set_data(val)
+                    
+                    # [CRITICAL FIX] Auto-scale colors for animations
+                    # Matplotlib set_data() does NOT auto-update limits. 
+                    # We must manually update clim to match the new data range.
+                    if hasattr(self._artist, 'set_clim'):
+                        if hasattr(val, 'min') and hasattr(val, 'max'):
+                             # Update limits to full range of new data
+                             self._artist.set_clim(val.min(), val.max())
+
+                # Case 2: Collections/Mesh (scatter, surf, pcolor)
+                elif hasattr(self._artist, 'set_array'):
+                    # Collections often need flattened arrays
+                    if hasattr(val, 'flatten') and not hasattr(self._artist, 'set_z'): 
+                        self._artist.set_array(val.flatten())
+                        # Auto-scale for scatter/mesh as well
+                        if hasattr(self._artist, 'autoscale'):
+                             self._artist.autoscale()
+                    else:
+                        self._artist.set_array(val)
+                        if hasattr(self._artist, 'autoscale'):
+                             self._artist.autoscale()
+
+            except Exception:
+                pass
+        # --- FIX END ---
+
         # 3. Handle Text Updates
         if 'String' in kwargs:
-             # Support set(t, 'String', 'Hello')
              if hasattr(self._artist, 'set_text'):
                  self._artist.set_text(kwargs['String'])
 
         # 4. Handle Style Updates (Color, LineWidth, etc.)
-        # Filter out data keys and String, map the rest
-        data_keys = ['XData', 'YData', 'ZData', 'String']
+        # Exclude data keys from style processing
+        data_keys = ['XData', 'YData', 'ZData', 'CData', 'String']
         style_args = {k: v for k, v in kwargs.items() if k not in data_keys}
         
         if style_args:
@@ -198,34 +231,12 @@ class GraphicsHandle:
 # HANDLE TYPES
 # ============================================================
 
-class LineHandle(GraphicsHandle):
-    """Handle for 2D/3D line plots."""
-    pass
-
-
-class ScatterHandle(GraphicsHandle):
-    """Handle for scatter plots."""
-    pass
-
-
-class SurfaceHandle(GraphicsHandle):
-    """Handle for 3D surface plots."""
-    pass
-
-
-class TextHandle(GraphicsHandle):
-    """Handle for text objects (annotations, labels)."""
-    pass
-
-
-class AxesHandle(GraphicsHandle):
-    """Handle for axes objects."""
-    pass
-
-
-class FigureHandle(GraphicsHandle):
-    """Handle for figure objects."""
-    pass
+class LineHandle(GraphicsHandle): pass
+class ScatterHandle(GraphicsHandle): pass
+class SurfaceHandle(GraphicsHandle): pass
+class TextHandle(GraphicsHandle): pass
+class AxesHandle(GraphicsHandle): pass
+class FigureHandle(GraphicsHandle): pass
 
 
 # ============================================================
@@ -243,24 +254,22 @@ def set(handle: Union[GraphicsHandle, List[GraphicsHandle]], *args, **kwargs):
     # Parse positional Name, Value pairs
     props = {}
     if len(args) > 0:
-        if len(args) % 2 != 0:
-             # Just like MATLAB, we can warn or ignore, but let's try to be robust
-             pass
         for i in range(0, len(args), 2):
             if i + 1 < len(args):
-                props[args[i]] = args[i+1]
+                # Ensure key is hashable (string)
+                key = args[i]
+                if isinstance(key, str):
+                    props[key] = args[i+1]
     
     # Merge with kwargs
     props.update(kwargs)
     
     # Delegate to handle(s)
     if isinstance(handle, (list, tuple, np.ndarray)):
-        # Array of handles: apply to all
         for h in handle:
             if hasattr(h, 'set'):
                 h.set(**props)
     elif hasattr(handle, 'set'):
-        # Single handle
         handle.set(**props)
     else:
         pass
