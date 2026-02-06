@@ -59,12 +59,10 @@ def execute(code: str, session: KernelSession):
             # ------------------------------
             # MATLAB COMMAND EXECUTION
             # ------------------------------
-            # 1. Check for explicit command flag (e.g. clc, clear, user scripts)
+            # 1. Check for explicit command flag
             is_cmd = getattr(value, "__mathexlab_command__", False)
 
             # 2. [CRITICAL FIX] Implicit Call Strategy
-            # If the user typed a bare Name (e.g. "comet3", "sin") and it resulted 
-            # in a callable, we treat it as a command request.
             if not is_cmd and callable(value) and isinstance(last.value, ast.Name):
                 is_cmd = True
 
@@ -72,7 +70,6 @@ def execute(code: str, session: KernelSession):
                 try:
                     # [FIX] Check if it is a SCRIPT that needs the workspace
                     if getattr(value, "__mathexlab_script__", False):
-                        # Pass the SESSION GLOBALS so variables stick!
                         value(session.globals)
                     else:
                         # Standard function/command call
@@ -80,8 +77,6 @@ def execute(code: str, session: KernelSession):
                             value()
                         except TypeError as e:
                             # [CRITICAL FIX] Handle "Not enough input arguments" gracefully
-                            # If calling comet3() fails because it needs args, we print a MATLAB error
-                            # instead of crashing the Python kernel.
                             msg = str(e)
                             if "required" in msg or "missing" in msg or "argument" in msg:
                                 print(f"Error: Not enough input arguments.")
@@ -90,7 +85,6 @@ def execute(code: str, session: KernelSession):
                             
                     return None
                 except Exception as e:
-                    # Allow error to propagate to the main error handler
                     raise e
 
             # ------------------------------
@@ -142,16 +136,21 @@ def execute(code: str, session: KernelSession):
                 if entry:
                     session.globals[var_name] = entry.func
                     # Recursively execute now that it's loaded
-                    # [FIX] Return the result of the recursive call to propagate errors/success
                     return execute(code, session)
         except Exception:
             pass
         
+        # [FIX] PRINT TRACEBACK TO TERMINAL BEFORE UI HANDLING
+        traceback.print_exc(file=sys.stderr)
+
         l_map = locals().get('line_map', {})
         _handle_matlab_error(e, code, l_map)
         return e 
 
     except Exception as e:
+        # [FIX] PRINT TRACEBACK TO TERMINAL BEFORE UI HANDLING
+        traceback.print_exc(file=sys.stderr)
+
         l_map = locals().get('line_map', {})
         _handle_matlab_error(e, code, l_map)
         return e 
