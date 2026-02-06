@@ -89,7 +89,13 @@ class PlotEngine:
     def _process_draw_requests(cls):
         cls._ensure_initialized()
 
-        with cls._draw_lock:
+        # [CRITICAL FIX] Use non-blocking lock acquisition.
+        # If the Kernel is currently holding the lock (e.g. adding data),
+        # we skip this frame instead of freezing the UI thread waiting for it.
+        if not cls._draw_lock.acquire(blocking=False):
+            return
+
+        try:
             # Atomic check for dirty flags
             dirty, immediate = plot_manager.consume_draw_request()
             
@@ -99,11 +105,12 @@ class PlotEngine:
 
             # [CRITICAL FIX] Use try/finally to ensure we ALWAYS notify the kernel.
             # If we return early due to an error (e.g. no figure), and don't notify,
-            # the kernel will deadlock waiting for the signal.
+            # the kernel will deadlock waiting for the signal (when wait=True).
             try:
                 try:
                     fig_state = plot_manager._get_fig_state()
                 except Exception:
+                    # No figure exists to draw on
                     return
 
                 widget = fig_state.widget
@@ -124,6 +131,9 @@ class PlotEngine:
             finally:
                 # Signal completion to any waiting threads (Kernel)
                 plot_manager.notify_draw_complete()
+        
+        finally:
+            cls._draw_lock.release()
 
     # ------------------------------------------------------------
     # Backend / mode resolution
@@ -135,6 +145,10 @@ class PlotEngine:
 
         if "PYTEST_CURRENT_TEST" in os.environ:
             return "test"
+
+        # [FIX] Explicitly check for PySide6 to detect App Mode reliably
+        if "PySide6" in sys.modules:
+            return "ui"
 
         if hasattr(sys, "ps1"):
             return "ui"
