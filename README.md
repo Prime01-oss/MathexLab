@@ -1,142 +1,150 @@
-# MathexLab
+# MathexLab Platform
 
-**MathexLab** is a high-fidelity scientific computing environment designed to replace MATLAB for PhD students, researchers, and engineers. It combines the familiar syntax of MATLAB (`.m` files) with the robust, open-source power of the **Python** scientific ecosystem (NumPy, SciPy, SymPy)—all wrapped in a professional **PySide6 (Qt)** interface.
+**MathexLab** is a modular, high-fidelity scientific computing platform designed to unify various STEM workflows into a single, professional interface. It serves as a container for multiple research tools, combining the familiar syntax of legacy tools (like MATLAB) with the modern power of the **Python** ecosystem (NumPy, SciPy, SymPy).
 
-Think of it as a free, lightweight MATLAB built on the modern Python stack.
+Think of it as an **Operating System for Science**—a lightweight, extensible shell that runs specialized IDEs.
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg) ![Python](https://img.shields.io/badge/python-3.11+-blue.svg) ![Status](https://img.shields.io/badge/status-Beta-orange.svg)
+![License](https://img.shields.io/badge/license-MIT-blue.svg) ![Python](https://img.shields.io/badge/python-3.11+-blue.svg) ![Status](https://img.shields.io/badge/status-Beta-orange.svg) ![Framework](https://img.shields.io/badge/GUI-PySide6-green.svg)
 
 ---
 
-## 🚀 Key Features & System Architecture
+## 🚀 System Architecture: The "Platform" Approach
 
-MathexLab is not just a text editor; it is a complete language runtime environment. The system is architected into four distinct layers: **UI**, **Kernel**, **Transpiler**, and **Toolboxes**.
+Unlike traditional monolithic editors, MathexLab is architected as a **Plugin-Based Platform**. This modular design allows different scientific languages to coexist within the same application window.
 
-### 🖥️ Layer 1: Professional IDE Interface (`mathexlab.ui`)
+### 🏗️ Core Components
+
+1.  **The Platform Shell (`app_platform`)**
+    * **StemShell:** The main window container that manages the application lifecycle, windowing system, and global settings.
+    * **Side Drawer:** A collapsible, professional navigation bar (similar to VS Code) that allows users to instantly switch between active tools (e.g., swapping from *MathexLab* to *Mathematica*).
+    * **Shared Core (`shared`)**: A centralized repository of math engines and plotting libraries.
+        * `shared.symbolic_core`: Unified access to SymPy and NumPy for all plugins.
+        * `shared.plotting_engine`: A high-performance Matplotlib wrapper that handles figure docking and 2D/3D rendering for any connected tool.
+
+2.  **The IDE Plugins (`ides`)**
+    The platform currently hosts two powerful tools:
+
+    * **📘 Tool 1: MathexLab (MATLAB® Compatible)**
+        * A transcript-based IDE that runs `.m` files.
+        * Features a dedicated **Workspace Inspector**, **Command Window**, and **Variable Viewer**.
+        * Powered by a custom **Transpiler** that converts MATLAB syntax to Python on the fly.
+    
+    * **🐺 Tool 2: Mathematica (Mathematica® Style)**
+        * A symbolic-first environment designed for high-level algebraic manipulation.
+        * Integrates deep symbolic computation capabilities directly into the platform.
+
+---
+
+## 🛠️ Feature Deep Dive: The MathexLab Tool
+
+The flagship tool of the platform is the **MathexLab IDE**, designed to replace MATLAB for PhD students and engineers.
+
+### 🖥️ Layer 1: Professional UI (`ides.mathexlab.ui`)
 The user interface is built with **PySide6**, strictly adhering to the "transcript model" familiar to MATLAB users.
 
 #### **1. Command Window (`ui.console.ConsoleWidget`)**
-* **What:** A specialized `QPlainTextEdit` widget that acts as the primary REPL (Read-Eval-Print Loop).
-* **Why:** Standard Python consoles do not behave like MATLAB. Researchers need a persistent history where the prompt (`>>`) and past outputs are immutable (read-only), but current input is editable.
-* **How:** * **Strict Transcript Modeling:** The console maintains a `locked_pos` index. Any keystroke attempting to edit text before the current prompt is blocked via event filtering.
-    * **Visual Distinction:** Implements a rigorous color-coding system where user input is **Grey (`#aaaaaa`)** and system output/prompts are **White (`#ffffff`)**, ensuring visual clarity during long sessions.
-    * **History Navigation:** Intercepts `Up`/`Down` keys to cycle through a session-specific command buffer, automatically handling multi-line inputs (`...` continuations).
+* **What:** A specialized `QPlainTextEdit` widget that acts as the primary REPL.
+* **Why:** Researchers need a persistent history where the prompt (`>>`) and past outputs are immutable (read-only), but current input is editable.
+* **How:** * **Strict Transcript Modeling:** The console maintains a `locked_pos` index to block editing of history.
+    * **Visual Distinction:** User input is **Grey** and system output is **White**, ensuring clarity.
 
 #### **2. Workspace Inspector (`ui.workspace.WorkspaceWidget`)**
 * **What:** An interactive data viewer that mirrors the MATLAB "Workspace" panel.
-* **Why:** Complex simulations involve large matrices. Debugging them via `print()` statements is inefficient. Users need to see dimensions, types, and values at a glance.
 * **How:**
-    * **Live Slicing:** For variables with dimensions $N > 2$ (e.g., 3D MRI data or time-series grids), the inspector automatically generates a 2D "Slice View" (e.g., `[:,:,0]`), preventing UI freezes when trying to render million-element arrays.
-    * **Bi-directional Sync:** Editing a cell in the table emits a signal that directly mutates the underlying `KernelSession` memory, allowing for "runtime patching" of simulation parameters.
+    * **Live Slicing:** Automatically generates 2D "Slice Views" (e.g., `[:,:,0]`) for 3D/4D arrays to prevent UI freezes.
+    * **Bi-directional Sync:** Editing a cell in the table directly mutates the underlying `KernelSession` memory.
 
 #### **3. Plot Dock (`ui.plotdock.PlotDock`)**
 * **What:** A dedicated panel for managing matplotlib figures.
-* **Why:** Floating windows get lost behind code editors. A docked panel keeps visualizations contextually relevant.
-* **How:** Integrates a custom Matplotlib backend that redirects `plt.show()` calls to a layout manager within the main window, organizing multiple figures into tabs or grid layouts.
+* **How:** Redirects `plt.show()` calls to a docked layout manager, organizing multiple figures into tabs.
 
 ---
 
-### 🧠 Layer 2: Native Transpiler Engine (`mathexlab.language`)
-This is the core innovation of MathexLab. It translates MATLAB source code into optimized Python bytecode on the fly.
+### 🧠 Layer 2: Native Transpiler Engine (`ides.mathexlab.language`)
+This is the core innovation. It translates MATLAB source code into optimized Python bytecode on the fly.
 
-#### **1. The Tokenizer (`language.tokenizer.Tokenizer`)**
-* **What:** A lexical analyzer built specifically for MATLAB syntax.
-* **Why:** MATLAB has unique parsing rules that standard regex parsers fail on (e.g., the single quote `'` can mean "String" OR "Hermitian Transpose" depending on context).
-* **How:** It uses a context-aware state machine to distinguish between `matrix` definitions (`[1 2; 3 4]`), `cell` arrays (`{1, 2}`), and `continuations` (`...`). It handles the automatic insertion of semicolons/commas where they are implied by newlines.
+#### **1. The Tokenizer (`language.tokenizer`)**
+* **What:** A lexical analyzer built specifically for MATLAB syntax (handling `'` ambiguity, `...` continuations, etc.).
 
-#### **2. The AST Parser (`language.parser.Parser`)**
-* **What:** A Recursive Descent Parser that builds an Abstract Syntax Tree (AST).
-* **Why:** To support complex structures like nested `if-elseif-else` blocks, `switch` statements with cell-array cases, and `try-catch` blocks which have no direct 1-to-1 mapping in simple regex replacement.
-* **How:** It recursively constructs nodes (`FunctionDef`, `ForLoop`, `BinOp`) that represent the logical flow of the program, completely independent of the Python syntax.
+#### **2. The AST Parser (`language.parser`)**
+* **What:** A Recursive Descent Parser that builds an Abstract Syntax Tree (AST) to support complex structures like `switch-case` and `try-catch`.
 
-#### **3. The Transpiler (`language.transpiler.ASTCompiler`)**
-* **What:** The compiler that converts the AST into executable Python code.
-* **Why:** MATLAB uses 1-based indexing (`A(1)`) while Python uses 0-based (`A[0]`). MATLAB passes arrays by value; Python passes by reference. These discrepancies must be reconciled.
-* **How:** * **Indexing Translation:** Automatically converts `A(i)` calls into `A[i-1]` accessors or `A.set_val()` calls for assignments.
-    * **Matrix Math:** Maps `*` to matrix multiplication (`@`) and `.*` to element-wise multiplication.
-    * **Auto-Copy:** Detects assignments to variables and injects `.copy()` calls to emulate MATLAB's "Copy-on-Write" behavior, ensuring safe mutation inside loops.
+#### **3. The Transpiler (`language.transpiler`)**
+* **What:** Converts the AST into executable Python code.
+* **Key Translations:**
+    * **Indexing:** Converts 1-based (`A(1)`) to 0-based (`A[0]`).
+    * **Matrix Math:** Maps `*` to matrix multiplication (`@`).
+    * **Memory:** Injects "Copy-on-Write" behavior to emulate MATLAB's safety.
 
 ---
 
-### 🔬 Layer 3: Specialized Research Toolboxes (`mathexlab.toolbox`)
-These libraries provide the domain-specific functionality required for PhD-level work.
+### 🔬 Layer 3: Research Toolboxes (`ides.mathexlab.toolbox`)
 
-#### **1. Partial Differential Equations (`toolbox.pde`)**
+#### **1. Partial Differential Equations (`pde`)**
 * **Function:** `pdepe(m, pdefun, icfun, bcfun, xmesh, tspan)`
-* **What:** A solver for systems of 1D parabolic and elliptic PDEs.
-* **Why:** Essential for Heat Transfer, Diffusion, and Electrostatics research.
-* **How:**
-    * **Method of Lines:** Discretizes the spatial derivatives ($x$) to convert the PDE into a system of Ordinary Differential Equations (ODEs) regarding time ($t$).
-    * **Geometric Support ($m$):** The solver kernel explicitly handles the singular term $x^{-m} \frac{\partial}{\partial x}(x^m f)$ for Slab ($m=0$), Cylindrical ($m=1$), and Spherical ($m=2$) coordinates.
-    * **Vectorization:** The internal residual calculation is fully vectorized using NumPy, avoiding slow Python loops during the mesh iteration.
+* **What:** Solves 1D parabolic/elliptic PDEs using the Method of Lines.
+* **Features:** Supports Slab, Cylindrical, and Spherical geometries ($m=0,1,2$).
 
-#### **2. Control Systems (`toolbox.control`)**
-* **Class:** `TransferFunction(num, den)`
-* **What:** Represents Linear Time-Invariant (LTI) systems in the Laplace domain ($s$).
-* **Why:** Control engineers need to treat systems as algebraic objects (`G = P * C / (1 + P * C)`).
-* **How:** Implements Python operator overloading (`__mul__`, `__add__`, `__pow__`) to perform polynomial convolution on numerators/denominators automatically.
-* **Function:** `rlocus(sys)`
-* **How:** Solves the characteristic equation $1 + k \cdot G(s) = 0$ for a logarithmically spaced vector of gains $k$, calculating roots using `np.roots()` and plotting the trajectories to visualize system stability.
+#### **2. Control Systems (`control`)**
+* **Function:** `tf`, `step`, `bode`, `rlocus`
+* **What:** Represents LTI systems and solves characteristic equations ($1 + k \cdot G(s) = 0$) for stability analysis.
 
-#### **3. Optimization (`toolbox.optim`)**
-* **Function:** `fmincon(fun, x0, A, b, Aeq, beq, lb, ub, nonlcon)`
-* **What:** Finds the minimum of a constrained non-linear multivariable function.
-* **Why:** Fundamental for Engineering Design Optimization (e.g., minimizing weight subject to stress constraints).
-* **How:** Wraps `scipy.optimize.minimize` with the `SLSQP` (Sequential Least SQuares Programming) method. It creates wrapper closures to map MATLAB-style constraint functions (returning `c, ceq`) into SciPy's dictionary-based constraint definitions.
-
-#### **4. Symbolic Math (`math.symbolic`)**
-* **Function:** `syms`, `diff`, `int`, `solve`
-* **What:** A Computer Algebra System (CAS) integration.
-* **How:** Dynamically injects `sympy.Symbol` objects into the user's workspace. Wrappers like `diff(f)` check the input type: if it is a numeric array, it performs finite difference (`np.diff`); if it is a symbol, it performs analytical differentiation (`sympy.diff`).
+#### **3. Optimization (`optim`)**
+* **Function:** `fmincon`
+* **What:** Wraps `scipy.optimize.minimize` (SLSQP) to solve constrained non-linear optimization problems using MATLAB-style constraint functions.
 
 ---
 
-## 🛠️ Tech Stack
+## 💻 Tech Stack
 
 MathexLab is built with high-performance Python technologies:
 
-* **Core Runtime**: [Python 3.11+](https://www.python.org/) - Selected for its improved error tracebacks and speed.
-* **GUI Framework**: [PySide6 (Qt)](https://doc.qt.io/qtforpython/) - Provides native OS integration and hardware-accelerated rendering.
-* **Linear Algebra**: [NumPy](https://numpy.org/) - The engine behind all matrix operations.
-* **Scientific Computing**: [SciPy](https://scipy.org/) - Powers the ODE solvers, Optimization algorithms, and Signal Processing.
-* **Symbolic Math**: [SymPy](https://www.sympy.org/) - The backend for the symbolic toolbox.
-* **Plotting**: [Matplotlib](https://matplotlib.org/) - The rendering engine for 2D/3D plots.
+| Component | Technology | Role |
+| :--- | :--- | :--- |
+| **GUI Framework** | **PySide6 (Qt)** | Native OS integration, dark mode, and hardware acceleration. |
+| **Runtime** | **Python 3.11+** | Selected for speed and advanced type hinting. |
+| **Math Engine** | **NumPy & SciPy** | Powers the linear algebra, signal processing, and ODE solvers. |
+| **Symbolic** | **SymPy** | Backend for the Mathematica tool and Symbolic Toolbox. |
+| **Rendering** | **Matplotlib** | The engine behind the shared 2D/3D plotting system. |
 
 ---
 
 ## 📦 Installation & Setup
 
-1.  **Clone the repository**
-    ```bash
-    git clone [https://github.com/patarsamar/MathexLab.git](https://github.com/patarsamar/MathexLab.git)
-    cd MathexLab
-    ```
+### Prerequisites
+* Python 3.10 or higher.
 
-2.  **Install dependencies**
-    ```bash
-    pip install -r requirements.txt
-    ```
+### Steps
 
-3.  **Run the application**
-    ```bash
-    python main.py
-    ```
+1.  **Clone the repository**
+    ```bash
+    git clone [https://github.com/patarsamar/MathexLab.git](https://github.com/patarsamar/MathexLab.git)
+    cd MathexLab
+    ```
+
+2.  **Install dependencies**
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+3.  **Run the Platform**
+    ```bash
+    python main.py
+    ```
+
+*Note: If you encounter import errors regarding `platform`, ensure you have run the `fix_imports.py` script included in the root directory to finalize the directory restructuring.*
 
 ---
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please fork the repository and create a pull request for any features, bug fixes, or documentation improvements.
+Contributions are welcome! Please fork the repository and create a pull request.
 
-1.  Fork the Project
-
-2.  Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-
-3.  Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-
-4.  Push to the Branch (`git push origin feature/AmazingFeature`)
-
-5.  Open a Pull Request
+1.  Fork the Project
+2.  Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
+3.  Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
+4.  Push to the Branch (`git push origin feature/AmazingFeature`)
+5.  Open a Pull Request
 
 ---
 
@@ -145,6 +153,4 @@ Contributions are welcome! Please fork the repository and create a pull request 
 Distributed under the MIT License. See `LICENSE` for more information.
 
 ## Author Details
-**Samarjit Patar** 
-
-📧 patarsamar123abc@gmail.com
+**Samarjit Patar** 📧 patarsamar123abc@gmail.com
